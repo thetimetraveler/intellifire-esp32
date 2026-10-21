@@ -1,0 +1,44 @@
+# Credentials — never commit
+secrets.yaml
+*.validated.yaml
+
+# ESPHome / PlatformIO build trees
+.esphome/
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build outputs
+*.bin
+*.elf
+*.map
+*.hex
+*.o
+*.d
+build/
+
+# Capture metadata (may contain device identifiers or network addresses).
+# Only frames_D0.jsonl / frames_D1.jsonl belong in the repository.
+captures/**/polls.jsonl
+captures/**/run.json
+captures/**/capture.log
+captures/**/manifest.jsonl
+captures/**/summary.json
+captures/**/*.sr
+captures/**/*.pvs
+captures/**/sweep-*-index.jsonl
+
+# Local downloads and vendor material — never commit
+downloads/
+*.dmg
+*.pdf
+
+# macOS
+.DS_Store

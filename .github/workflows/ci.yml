@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host-tests:
+    name: Host tests and replay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run the host suites
+        run: make -C firmware test
+
+      - name: Replay the recorded captures
+        run: |
+          set -euo pipefail
+          make -C firmware test-replay CAPTURES=../captures | tee replay.out
+          grep -q 'compared 6145 exchanges' replay.out
+          grep -q '0 MISMATCH' replay.out
+
+      - name: Run the Python tool suites
+        run: make -C firmware python-test
+
+  firmware-config:
+    name: ESPHome config validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install ESPHome
+        run: pip install esphome==2026.6.5
+
+      - name: Validate the YAML
+        run: |
+          set -euo pipefail
+          cp firmware/secrets.yaml.example firmware/secrets.yaml
+          esphome config firmware/fireplace-ecm.yaml > /dev/null
+          rm -f firmware/secrets.yaml
+
+  hygiene:
+    name: Secrets and PII scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No credential files in the tree
+        run: |
+          set -euo pipefail
+          if git ls-files | grep -E '(^|/)secrets\.yaml$'; then
+            echo "A real secrets.yaml is tracked."
+            exit 1
+          fi
+          if git ls-files | grep -E '(^|/)(\.esphome|\.venv|__pycache__|\.DS_Store)(/|$)'; then
+            echo "A build, environment, or cache file is tracked."
+            exit 1
+          fi
+
+      - name: No owner, network, or device identifiers
+        run: |
+          set -euo pipefail
+          if git grep -nE 'amansingh|Aman Singh|as253|@hearthnhome\.com|Kranz|192\.168\.|172\.30\.|10\.0\.1\.|CE824|01KF|10:BD|first_floor_|front_blinds' -- . ':!.github/workflows/ci.yml'; then
+            echo "Owner, network, or device identifier found."
+            exit 1
+          fi

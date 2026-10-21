@@ -1,0 +1,793 @@
+<title>ECM Wiring Diagram</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+
+<style>
+/* ===========================================================================
+   ECM WIRING DIAGRAM — design tokens
+   Color: technical slate ground, saturated hues reserved for wire function
+          (power / ground / rx / tx / sense) so the diagram reads by color.
+   Type:  IBM Plex Sans for prose, IBM Plex Mono for every identifier,
+          pin name and net label — the engineering vernacular of this project.
+   Layout: schematic plate at top, legend, then a reference table and notes.
+   =========================================================================== */
+:root {
+  --bg:        #f6f7f9;
+  --surface:   #ffffff;
+  --surface-2: #eef1f5;
+  --fg:        #0f151c;
+  --muted:     #5a6674;
+  --line:      #d3dae3;
+  --line-soft: #e4e9ef;
+  --code-tint: rgba(15,21,28,.07);
+
+  --pwr:   #c2410c;   /* +5 V supply        */
+  --gnd:   #475569;   /* ground / return    */
+  --rx:    #0369a1;   /* ECM -> ESP32       */
+  --tx:    #15803d;   /* ESP32 -> ECM       */
+  --ctrl:  #7c3aed;   /* switch sense       */
+
+  --warn:   #b45309;
+  --warn-bg:#fef3c7;
+  --danger: #b91c1c;
+  --danger-bg:#fee2e2;
+
+  --board:    #e8edf3;
+  --board-edge:#b9c4d1;
+  --pad:      #cbd5e1;
+  --pad-edge: #94a3b8;
+
+  --r: 10px;
+  --shadow: 0 1px 2px rgba(15,21,28,.06), 0 4px 16px rgba(15,21,28,.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg:        #0c1116;
+    --surface:   #141b23;
+    --surface-2: #1b232d;
+    --fg:        #e7eef5;
+    --muted:     #97a3b2;
+    --line:      #2b3542;
+    --line-soft: #222b36;
+    --code-tint: rgba(255,255,255,.09);
+
+    --pwr:   #fb8c3c;
+    --gnd:   #9aa8b8;
+    --rx:    #4cb8ec;
+    --tx:    #5dd07e;
+    --ctrl:  #b39af5;
+
+    --warn:   #fbbf24;
+    --warn-bg:#3a2c08;
+    --danger: #f28080;
+    --danger-bg:#3d1515;
+
+    --board:    #1c2530;
+    --board-edge:#3a4757;
+    --pad:      #2f3b4a;
+    --pad-edge: #55647a;
+
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 18px rgba(0,0,0,.3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg:        #0c1116;
+  --surface:   #141b23;
+  --surface-2: #1b232d;
+  --fg:        #e7eef5;
+  --muted:     #97a3b2;
+  --line:      #2b3542;
+  --line-soft: #222b36;
+  --code-tint: rgba(255,255,255,.09);
+
+  --pwr:   #fb8c3c;
+  --gnd:   #9aa8b8;
+  --rx:    #4cb8ec;
+  --tx:    #5dd07e;
+  --ctrl:  #b39af5;
+
+  --warn:   #fbbf24;
+  --warn-bg:#3a2c08;
+  --danger: #f28080;
+  --danger-bg:#3d1515;
+
+  --board:    #1c2530;
+  --board-edge:#3a4757;
+  --pad:      #2f3b4a;
+  --pad-edge: #55647a;
+
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 18px rgba(0,0,0,.3);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.6;
+  padding-block: 0 56px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrap {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-inline: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 34px;
+}
+
+/* ---------- header ---------- */
+.hdr {
+  padding-block: 40px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border-bottom: 2px solid var(--fg);
+  margin-bottom: 2px;
+}
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+h1 {
+  font-size: clamp(27px, 4.4vw, 40px);
+  line-height: 1.12;
+  font-weight: 700;
+  letter-spacing: -.021em;
+  margin: 0;
+  text-wrap: balance;
+}
+.hdr p {
+  margin: 0;
+  max-width: 66ch;
+  color: var(--muted);
+  font-size: 15.5px;
+}
+.hdr code { color: var(--fg); }
+
+/* ---------- generic section ---------- */
+section { display: flex; flex-direction: column; gap: 16px; }
+h2 {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -.01em;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+h2::before {
+  content: "";
+  width: 3px;
+  height: 17px;
+  border-radius: 2px;
+  background: var(--fg);
+  flex: none;
+}
+.lede { margin: -6px 0 0; color: var(--muted); max-width: 74ch; font-size: 14.5px; }
+
+/* ---------- diagram plate ---------- */
+.plate {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.diagram-scroll { overflow-x: auto; overflow-y: hidden; }
+.diagram-scroll svg {
+  display: block;
+  width: 100%;
+  min-width: 840px;
+  height: auto;
+}
+.plate-foot {
+  border-top: 1px solid var(--line-soft);
+  padding: 11px 18px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--surface-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 20px;
+  align-items: center;
+}
+.plate-foot b { color: var(--fg); font-weight: 600; }
+
+/* ---------- SVG styling ---------- */
+.board        { fill: var(--board); stroke: var(--board-edge); stroke-width: 2; }
+.usb          { fill: none; stroke: var(--board-edge); stroke-width: 2; }
+.pad          { fill: var(--pad); stroke: var(--pad-edge); stroke-width: 1.5; }
+.pad-pwr      { fill: var(--pad); stroke: var(--pwr); stroke-width: 2; }
+.pad-gnd      { fill: var(--pad); stroke: var(--gnd); stroke-width: 2; }
+.pad-en       { fill: var(--pad); stroke: var(--ctrl); stroke-width: 2; }
+
+.bname   { fill: var(--fg); font-family: "IBM Plex Sans", sans-serif; font-size: 16px; font-weight: 700; text-anchor: middle; }
+.bsub    { fill: var(--muted); font-family: "IBM Plex Mono", monospace; font-size: 11.5px; text-anchor: middle; }
+.plabel  { fill: var(--fg); font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 500; text-anchor: end; }
+.plabel-off { fill: var(--muted); font-weight: 400; }
+.pinlbl  { font-family: "IBM Plex Mono", monospace; font-size: 12px; font-weight: 500; fill: var(--fg); }
+.pinlbl-off { fill: var(--muted); font-weight: 400; }
+
+.w { fill: none; stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; }
+.w-pwr  { stroke: var(--pwr); }
+.w-gnd  { stroke: var(--gnd); }
+.w-rx   { stroke: var(--rx); }
+.w-tx   { stroke: var(--tx); }
+.w-ctrl { stroke: var(--ctrl); }
+.w-dash { stroke-dasharray: 5 4; stroke-width: 2; }
+
+.netlbl { font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 600; text-anchor: middle; }
+.f-lbl  { font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 600; text-anchor: middle; fill: var(--muted); }
+.sw-lbl { font-family: "IBM Plex Sans", sans-serif; font-size: 12.5px; font-weight: 600; text-anchor: middle; fill: var(--fg); }
+.sw-sub { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; text-anchor: middle; fill: var(--warn); }
+
+.fuse-body { fill: var(--surface); stroke: var(--pwr); stroke-width: 2; }
+.res-body  { fill: var(--surface); stroke: var(--tx); stroke-width: 2; }
+.res-en    { fill: var(--surface); stroke: var(--ctrl); stroke-width: 2; }
+.contact   { fill: var(--fg); }
+.capplate  { stroke: var(--gnd); stroke-width: 2.6; stroke-linecap: round; }
+
+.badge-q { fill: var(--warn); }
+.badge-t { fill: var(--surface); font-family: "IBM Plex Mono", monospace; font-size: 11px; font-weight: 700; text-anchor: middle; fill: #fff; }
+.usb-warn { fill: var(--warn); font-family: "IBM Plex Mono", monospace; font-size: 10.5px; font-weight: 600; text-anchor: middle; }
+
+/* ---------- legend ---------- */
+.legend {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
+  gap: 10px 22px;
+}
+.lg {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.lg i { width: 26px; height: 3px; border-radius: 2px; flex: none; }
+.lg span { color: var(--muted); }
+.lg b { font-weight: 600; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+.sw-pwr  { background: var(--pwr); }
+.sw-gnd  { background: var(--gnd); }
+.sw-rx   { background: var(--rx); }
+.sw-tx   { background: var(--tx); }
+.sw-ctrl { background: var(--ctrl); }
+
+/* ---------- table ---------- */
+.tbl-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--r); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 660px; }
+thead th {
+  text-align: left;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-2);
+  white-space: nowrap;
+}
+tbody td { padding: 12px 16px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+tbody tr:last-child td { border-bottom: 0; }
+td.mono, th.mono { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; }
+.dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 9px; vertical-align: 1px; flex: none; }
+td .row { display: flex; align-items: baseline; gap: 0; }
+.note { color: var(--muted); }
+
+/* ---------- callouts ---------- */
+.calls { display: grid; grid-template-columns: repeat(auto-fit, minmax(288px, 1fr)); gap: 14px; }
+.call {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--muted);
+  border-radius: 8px;
+  padding: 15px 17px;
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.call h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.call p { margin: 0; font-size: 13.5px; color: var(--muted); }
+.call p b { color: var(--fg); font-weight: 600; }
+.call.danger { border-left-color: var(--danger); background: var(--danger-bg); }
+.call.danger h3 { color: var(--danger); }
+.call.danger p { color: var(--fg); }
+.call.warn { border-left-color: var(--warn); background: var(--warn-bg); }
+.call.warn h3 { color: var(--warn); }
+.call.warn p { color: var(--fg); }
+.call.info { border-left-color: var(--rx); }
+
+code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: .895em;
+  background: var(--surface-2);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.call.danger code, .call.warn code { background: var(--code-tint); border-color: transparent; }
+
+footer {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+}
+footer b { color: var(--fg); font-weight: 600; }
+
+@media (max-width: 560px) {
+  .wrap { padding-inline: 16px; gap: 28px; }
+  .hdr { padding-block: 30px 4px; }
+}
+</style>
+
+<div class="wrap">
+
+  <header class="hdr">
+    <div class="eyebrow">Heat &amp; Glo PRIMO · IntelliFire · replacement module</div>
+    <h1>ECM Wiring Diagram</h1>
+    <p>
+      A Seeed <b>XIAO ESP32C6</b> build standing in for the Wi-Fi module (WFM), wired to the
+      fireplace controller's 8-pin Wi-Fi port. Five wires reach the port — power, ground, an enable
+      line and two data lines — plus a sixth connection that ties the write-enable pin to the XIAO's
+      <i>own</i> ground.
+    </p>
+  </header>
+
+  <div style="margin: 18px 0 26px; padding: 14px 18px; border-left: 4px solid #b45309; background: #fef3c7; color: #0f151c; border-radius: 6px; line-height: 1.55;">
+    <b>⚠️ This page documents the earlier Seeed XIAO ESP32C6 build.</b>
+    The current firmware targets an ESP32-S3 with a different pin map:
+    RX <code>GPIO14</code> ← ECM pin 6, TX <code>GPIO21</code> → 1 kΩ → pin 4,
+    write-enable sense <code>GPIO1</code> → GND, 5 V pin 3 through the fuse, GND pin 8,
+    and 1 kΩ from pin 1 to GND. GPIO2 is <b>not</b> used — it is the onboard IO2 LED.
+    The current wiring table is in <code>firmware/README.md</code>, “Wiring”.
+  </div>
+
+  <!-- ============================== STATUS ============================== -->
+  <section>
+    <h2>Status: bench-verified — the 0 V fault was the pin-1 gate</h2>
+    <div class="calls">
+      <div class="call info">
+        <h3>✅ The 0 V fault is RESOLVED — the gate is <b>pin 1</b></h3>
+        <p>
+          The build came up dark at first — no LEDs, <b>pin 3 at 0 V</b> — because <b>the ECM gates
+          power to its Wi-Fi port on pin 1 being pulled LOW.</b>
+          Pin 1 is a module-presence line: a seated module holds it low; with the socket empty it
+          floats high and the port stays dead.
+        </p>
+        <p>
+          <b>Measured:</b> pin 1 reads <b>0.06 V</b> with the stock module fitted (pin 3 = 5.04 V) and
+          <b>2.36 V</b> with it removed (pin 3 = 0 V).
+          ⭐ <b>Confirmed by experiment:</b> a <b>1 kΩ resistor from pin 1 to ground made the port power
+          up and the ESP32 boot.</b>
+        </p>
+        <p>
+          So the 0 V was <b>not a fault — it is a gate doing its job.</b> A dark device is not
+          automatically a data-line wiring fault: <b>check pin 1 first.</b> And note this only applies
+          when powering from pin 3; a USB-powered bench build neither needs the resistor nor is
+          troubled by the gate.
+        </p>
+        <p>
+          ⭐ <b>The corrected record:</b> the gate is <b>pin 1, not pin 5</b>.
+        </p>
+      </div>
+      <div class="call warn">
+        <h3>⚠ The power plan's precondition was never met</h3>
+        <p>
+          Powering from pin 3 was always conditional on <b>measuring the rail's current budget
+          first</b> — the stock module's TX peaked near 320 mA, an ESP32-C6 with Wi-Fi near 350 mA.
+          <b>No DC-current measurement of this port exists anywhere in the project.</b>
+        </p>
+        <p>
+          The gate fault explains the 0 V, but the current budget remains <b>unmeasured</b>. Measure
+          it before powering a build from this rail; it is an open item, not a closed one.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== DIAGRAM ============================== -->
+  <section>
+    <h2>Connections</h2>
+    <div class="plate">
+      <div class="diagram-scroll">
+        <svg viewBox="0 0 1040 620" role="img" aria-labelledby="dgTitle dgDesc">
+          <title id="dgTitle">Wiring between the XIAO ESP32C6 and the ECM 8-pin Wi-Fi port</title>
+          <desc id="dgDesc">
+            The XIAO on the left connects to the ECM port on the right. Power runs from ECM pin 3
+            through a fuse to the XIAO 5V pad. Ground runs from the XIAO GND pad to ECM pin 8, the real
+            ground. ECM pin 1 is the presence gate: it must be pulled to ground through a 1 kilohm
+            resistor or the ECM never energises pin 3. The XIAO's D4 (GPIO22) receives from ECM pin 6.
+            The XIAO's D3 (GPIO21) transmits to ECM pin 4. The XIAO's D2 (GPIO2) is tied directly to
+            ground, holding the write-enable input low so that writes are enabled. A dashed marker shows
+            where a switch can be inserted later.
+          </desc>
+
+          <!-- ============ XIAO board ============ -->
+          <rect class="usb" x="126" y="56" width="48" height="26" rx="5"/>
+          <text class="usb-warn" x="150" y="48">USB-C</text>
+
+          <rect class="board" x="60" y="80" width="180" height="440" rx="16"/>
+          <text class="bname" x="150" y="118">XIAO ESP32C6</text>
+          <text class="bsub"  x="150" y="138">ESP32-C6 · 3.3 V logic</text>
+
+          <!-- XIAO pads (right edge) -->
+          <rect class="pad pad-pwr" x="226" y="136" width="24" height="28" rx="4"/>
+          <text class="plabel" x="218" y="155">5V</text>
+
+          <rect class="pad pad-gnd" x="226" y="186" width="24" height="28" rx="4"/>
+          <text class="plabel" x="218" y="205">GND</text>
+
+          <rect class="pad" x="226" y="286" width="24" height="28" rx="4"/>
+          <text class="plabel" x="218" y="305">D2 · GPIO2</text>
+
+          <rect class="pad" x="226" y="346" width="24" height="28" rx="4"/>
+          <text class="plabel" x="218" y="365">D3 · GPIO21</text>
+
+          <rect class="pad" x="226" y="406" width="24" height="28" rx="4"/>
+          <text class="plabel" x="218" y="425">D4 · GPIO22</text>
+
+          <!-- ============ ECM port ============ -->
+          <rect class="board" x="780" y="60" width="180" height="500" rx="16"/>
+          <text class="bname" x="870" y="98">ECM Wi-Fi port</text>
+          <text class="bsub"  x="870" y="118">IntelliFire · 8-pin</text>
+
+          <!-- ECM pins (left edge) -->
+          <rect class="pad pad-en" x="758" y="116" width="24" height="28" rx="4"/>
+          <text class="pinlbl" x="792" y="135">1 · presence gate</text>
+
+          <rect class="pad" x="758" y="166" width="24" height="28" rx="4"/>
+          <text class="pinlbl pinlbl-off" x="792" y="185">2 · not used</text>
+
+          <rect class="pad pad-pwr" x="758" y="216" width="24" height="28" rx="4"/>
+          <text class="pinlbl" x="792" y="235">3 · +5 V</text>
+
+          <rect class="pad" x="758" y="266" width="24" height="28" rx="4"/>
+          <text class="pinlbl" x="792" y="285">4 · data →</text>
+
+          <rect class="pad" x="758" y="316" width="24" height="28" rx="4"/>
+          <text class="pinlbl pinlbl-off" x="792" y="335">5 · unresolved</text>
+
+          <rect class="pad" x="758" y="366" width="24" height="28" rx="4"/>
+          <text class="pinlbl" x="792" y="385">6 · data →</text>
+
+          <rect class="pad" x="758" y="416" width="24" height="28" rx="4"/>
+          <text class="pinlbl pinlbl-off" x="792" y="435">7 · unconnected</text>
+
+          <rect class="pad pad-gnd" x="758" y="466" width="24" height="28" rx="4"/>
+          <text class="pinlbl" x="792" y="485">8 · GND ⭐</text>
+
+          <!-- unconfirmed badge on pin 4 -->
+          <circle class="badge-q" cx="770" cy="280" r="11"/>
+          <text class="badge-t" x="770" y="284">?</text>
+
+          <!-- ============ WIRES ============ -->
+
+          <!-- 1. Power: 5V -> fuse -> pin 3 -->
+          <path class="w w-pwr" d="M250 150 H 374"/>
+          <path class="w w-pwr" d="M426 150 H 746 V 230 H 758"/>
+          <rect class="fuse-body" x="374" y="141" width="52" height="18" rx="3"/>
+          <line class="w w-pwr" x1="374" y1="150" x2="426" y2="150"/>
+          <text class="f-lbl" x="400" y="130">FUSE · 0.5–1 A</text>
+          <text class="netlbl" x="530" y="141" fill="var(--pwr)">+5 V</text>
+
+          <!-- bulk cap across the rails (drawn at the XIAO end, where it belongs) -->
+          <path class="w w-pwr" d="M340 150 V 159"/>
+          <line class="capplate" x1="322" y1="160" x2="358" y2="160" style="stroke:var(--pwr)"/>
+          <line class="capplate" x1="322" y1="170" x2="358" y2="170" style="stroke:var(--pwr)"/>
+          <path class="w w-gnd" d="M340 171 V 200"/>
+          <text class="f-lbl" x="340" y="226">100–470 µF ?</text>
+
+          <!-- 2. Ground: XIAO GND -> pin 8 (the real ground).
+               Routed to the LEFT of the pin-3 power drop so the two never cross. -->
+          <path class="w w-gnd" d="M250 200 H 680 V 480 H 758"/>
+          <text class="netlbl" x="420" y="192" fill="var(--gnd)">GND</text>
+
+          <!-- 2b. Presence gate: pin 1 -> 1 kΩ -> GND. Without this the ECM never powers pin 3. -->
+          <path class="w w-ctrl" d="M758 130 H 546"/>
+          <rect class="res-en" x="490" y="121" width="56" height="18" rx="3"/>
+          <path class="w w-ctrl" d="M490 130 H 460 V 200"/>
+          <circle cx="460" cy="200" r="5" fill="var(--ctrl)"/>
+          <text class="f-lbl" x="540" y="112" style="fill:var(--ctrl)">1 kΩ gate</text>
+
+          <!-- 3. RX: pin 6 -> D4 -->
+          <path class="w w-rx" d="M250 420 H 720 V 380 H 758"/>
+          <path d="M366 420 L380 413.5 L380 426.5 Z" fill="var(--rx)"/>
+          <text class="netlbl" x="480" y="441" fill="var(--rx)">ECM → ESP32</text>
+
+          <!-- 4. TX: D3 -> 1k -> pin 4 -->
+          <path class="w w-tx" d="M250 360 H 372"/>
+          <rect class="res-body" x="372" y="351" width="56" height="18" rx="3"/>
+          <path class="w w-tx" d="M428 360 H 690 V 280 H 758"/>
+          <text class="f-lbl" x="400" y="342">1 kΩ series</text>
+          <path d="M534 360 L520 353.5 L520 366.5 Z" fill="var(--tx)"/>
+          <text class="netlbl" x="480" y="380" fill="var(--tx)">ESP32 → ECM</text>
+
+          <!-- 5. Write enable: D2 tied low to GND -->
+          <path class="w w-ctrl" d="M250 300 H 560 V 200"/>
+          <circle cx="560" cy="200" r="5" fill="var(--gnd)"/>
+          <text class="netlbl" x="350" y="291" fill="var(--ctrl)">write enable — tied low</text>
+
+          <!-- where the switch goes later -->
+          <rect x="474" y="285" width="82" height="30" rx="7"
+                fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <text class="sw-sub" x="515" y="277" style="fill:var(--muted)">switch later</text>
+
+          <!-- ground symbol on the pin-8 return -->
+          <line class="w w-gnd" x1="667" y1="552" x2="693" y2="552"/>
+          <line class="w w-gnd" x1="672" y1="559" x2="688" y2="559"/>
+          <line class="w w-gnd" x1="677" y1="566" x2="683" y2="566"/>
+          <path class="w w-gnd" d="M680 480 V 552"/>
+          <text class="f-lbl" x="680" y="586" style="fill:var(--gnd)">the real ground</text>
+        </svg>
+      </div>
+      <div class="plate-foot">
+        <span><b>5 wires to the ECM</b> — power, ground (pin 8), presence gate (pin 1) and two data lines — plus two 1 kΩ resistors: one in TX, one on the gate.</span>
+        <span><b>D2 tied low</b> = writes enabled, with no hardware interlock.</span>
+        <span>ECM supplies the rail; share its ground.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================== LEGEND ============================== -->
+  <section>
+    <h2>Legend</h2>
+    <div class="legend">
+      <div class="lg"><i class="sw-pwr"></i><div><b>+5 V supply</b><br><span>pin 3 → fused → 5V pad</span></div></div>
+      <div class="lg"><i class="sw-gnd"></i><div><b>Ground</b><br><span>pin 8 only — the real ground</span></div></div>
+      <div class="lg"><i class="sw-ctrl"></i><div><b>Presence gate</b><br><span>pin 1 → 1 kΩ → GND (powers pin 3)</span></div></div>
+      <div class="lg"><i class="sw-rx"></i><div><b>RX — ECM → ESP32</b><br><span>pin 6 → D4 (GPIO22)</span></div></div>
+      <div class="lg"><i class="sw-tx"></i><div><b>TX — ESP32 → ECM</b><br><span>D3 (GPIO21) → 1 kΩ → pin 4, no switch</span></div></div>
+      <div class="lg"><i class="sw-ctrl"></i><div><b>Write enable</b><br><span>D2 (GPIO2) → GND, held low</span></div></div>
+    </div>
+  </section>
+
+  <!-- ============================== TABLE ============================== -->
+  <section>
+    <h2>Pin-by-pin</h2>
+    <p class="lede">
+      Silk labels are what's printed on the XIAO. The ESPHome config addresses the raw GPIO numbers.
+    </p>
+    <div class="tbl-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Wire</th>
+            <th class="mono">XIAO pad</th>
+            <th class="mono">GPIO</th>
+            <th class="mono">ECM pin</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span class="dot" style="background:var(--pwr)"></span>Power</td>
+            <td class="mono">5V</td>
+            <td class="mono">—</td>
+            <td class="mono">3</td>
+            <td class="note">Through an inline fuse. <b>Never with USB connected.</b></td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--gnd)"></span>Ground</td>
+            <td class="mono">GND</td>
+            <td class="mono">—</td>
+            <td class="mono">8</td>
+            <td class="note"><b>Pin 8 is the ground used.</b> Pin 2 also reads ~0 V and was long listed as a second ground; it is not used here.</td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--ctrl)"></span>Presence gate</td>
+            <td class="mono">—</td>
+            <td class="mono">—</td>
+            <td class="mono">1</td>
+            <td class="note">⭐ <b>Pin 1 → 1 kΩ → GND. Not optional.</b> The ECM gates port power on this line — leave it open and <b>pin 3 never powers up</b>, however correct everything else is. Only applies when powering from pin 3.</td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--rx)"></span>RX</td>
+            <td class="mono">D4</td>
+            <td class="mono">GPIO22</td>
+            <td class="mono">6</td>
+            <td class="note">Confirmed by capture. Input — never drive it. <b>No series resistor</b> (see below).</td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--tx)"></span>TX</td>
+            <td class="mono">D3</td>
+            <td class="mono">GPIO21</td>
+            <td class="mono">4</td>
+            <td class="note">Through a <b>1 kΩ series resistor</b>, fitted at the XIAO end. No switch. <b>Pin 4's physical identity is unconfirmed</b> — verify it before soldering to the pad.</td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--ctrl)"></span>Write enable</td>
+            <td class="mono">D2</td>
+            <td class="mono">GPIO2</td>
+            <td class="mono">—</td>
+            <td class="note">Tied straight to GND, so the pin reads low and writes are enabled. No switch fitted.</td>
+          </tr>
+          <tr>
+            <td><span class="dot" style="background:var(--muted)"></span>Unused</td>
+            <td class="mono">D0 D1 D5 D6 D7 D8–D10</td>
+            <td class="mono">0 1 23 16 17 19 20 18</td>
+            <td class="mono">2, 5, 7</td>
+            <td class="note">Leave open. <b>Pin 1 is no longer here</b> — it is the presence gate. Pin 2 reads ~0 V and was historically listed as a second ground; pin 8 is the return used. Avoid D6/D7 (GPIO16/17) — ROM console chatter at 115200.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============================== CALLS ============================== -->
+  <section>
+    <h2>What is verified, and what is not</h2>
+    <div class="calls">
+
+      <div class="call danger">
+        <h3>⛔ Never USB and pin 3 together</h3>
+        <p>
+          On the XIAO the <b>5V pad and USB VBUS are the same node</b>. Feeding pin 3's rail in while
+          USB is plugged puts two sources on one net and backfeeds your laptop's port.
+        </p>
+        <p>
+          <b>Bench:</b> power from USB, leave pin 3 disconnected. <b>In the appliance:</b> pin 3 only, no USB —
+          updates go over OTA.
+        </p>
+      </div>
+
+      <div class="call warn">
+        <h3>⚠ Two different things are being called "pin 4 confirmed"</h3>
+        <p>
+          <b>What is confirmed:</b> the <i>direction</i> of the traffic on the channel the analyzer
+          labelled <code>D1</code> — module → ECM. That rests on content evidence (a new value appears
+          on D1 0.176 s before the ECM announces it), not on a voltage reading.
+        </p>
+        <p>
+          <b>What is not:</b> that the channel labelled <code>D1</code> is <i>physically pin 4</i>.
+          That rests on one operator hookup record, of the same class as the disputed pin-3 reading,
+          and it is entangled with the unresolved question of which end of the port each observer counted
+          from.
+        </p>
+        <p>
+          <code>docs/COMMAND_MAP.md</code> states the first and reads as though it settled the second —
+          that over-claim propagates into several other docs. Pin 6 has an independent anchor
+          (post 296's two-point match); pin 4 has none.
+        </p>
+      </div>
+
+      <div class="call info">
+        <h3>One resistor on the TX line</h3>
+        <p>
+          <b>1 kΩ in series, GPIO21 → pin 4</b>, fitted at the XIAO end. Pin 4 is still unconfirmed: if
+          it is an ECM <i>output</i> rather than its receive, GPIO21 is push-pull driving a driven line
+          about 2.7 times a second, and the resistor bounds that to roughly 3 mA. At 9600 baud it costs
+          nothing.
+        </p>
+        <p>
+          A 47 kΩ pull-up from the pin-4 node to the XIAO's 3V3 was considered and deferred. Without it
+          the line is undriven while GPIO21 is high-Z — every reboot and every OTA. The ECM has been
+          observed tolerating multi-second silences from an absent module, so this is a known trade
+          rather than an oversight. If it is ever fitted, reference it to the XIAO's 3V3 and
+          <b>not</b> to pin 5, whose rail-versus-input status is unresolved.
+        </p>
+        <p>
+          <b>RX got no such resistor.</b> It does not strictly need one — the far end is the ECM's
+          confirmed TX idling at 3.2 V, in spec for a 3.3 V GPIO, so this is not a violated
+          requirement. But the same argument made for TX applies by symmetry: a future
+          misconfiguration, a stray boot glitch, or a pin-numbering error could put two push-pull
+          drivers on one net with nothing to bound the current. Cheap insurance the install skipped.
+        </p>
+      </div>
+
+      <div class="call warn">
+        <h3>⚠ Pin 3's current budget was never measured</h3>
+        <p>
+          The stock module's TX peaked around <b>320 mA</b>; an ESP32-C6 with Wi-Fi peaks near
+          <b>350 mA</b>. This rail was to be checked <b>before</b> committing to it as the source —
+          <b>it never was</b>, and no DC-current measurement of this port exists anywhere.
+        </p>
+        <p>
+          <b>The fuse is drawn mid-span and neither end is specified — but which end you measure
+          matters.</b> 0 V at the <b>XIAO pad</b> with a live port means a blown fuse; 0 V at the
+          <b>port pin</b> means the rail itself is dead. Separate the two before drawing any
+          conclusion.
+        </p>
+        <p>
+          Powering from the ECM couples this device's failure domain to the ECM's — the accepted trade
+          for reproducing the stock topology. The fuse and the bulk cap are what were meant to make
+          that safe.
+        </p>
+      </div>
+
+      <div class="call info">
+        <h3>The analyzer rule still holds</h3>
+        <p>
+          Powering the device <b>from</b> pin 3 is a deliberate connection through a fuse. Clipping an
+          <b>instrument</b> to pin 3 is still forbidden — it's a supply rail, not a signal, and probing
+          it risks the analyzer while telling you nothing.
+        </p>
+      </div>
+
+      <div class="call warn">
+        <h3>⚠ Writes are always enabled</h3>
+        <p>
+          D2 is tied to ground, so the firmware reads the write-enable input low and sends every command
+          Home Assistant asks for. <b>There is no hardware interlock</b> — nothing physical can sever the
+          TX line or stop a write.
+        </p>
+        <p>
+          What still holds: a reboot writes nothing, because intent starts unknown; and every write needs
+          Home Assistant to explicitly ask first. To restore the gate, cut the D2–GND tie and insert a
+          <b>single-pole</b> switch there — TX stays wired straight through.
+        </p>
+        <p>
+          <b>A permanent tie to GND is safe here.</b> On the ESP32-C6 the strapping pins are
+          <code>GPIO4, GPIO5, GPIO8, GPIO9, GPIO15</code> — <b>GPIO2 is not one</b>, so holding it low
+          cannot disturb boot mode. (Worth having checked: a strapping pin tied to ground is exactly
+          the kind of thing that "works" until one board revision doesn't.)
+        </p>
+      </div>
+
+      <div class="call warn">
+        <h3>⚠ The build record is incomplete</h3>
+        <p>
+          The build uses pin-3 power, an inline fuse and the 1 kΩ TX resistor. <b>Not recorded:</b>
+          whether the <b>bulk cap</b> is fitted (drawn above, marked <code>?</code>), or the
+          <b>fuse's type and rating</b> — "0.5–1 A" is a design band, not a measured part. The
+          <b>pin-1 gate resistor</b> is what makes the port power up.
+        </p>
+        <p>
+          This is not bookkeeping. A blown fuse is one of the live hypotheses for the 0 V reading, and
+          a fitted cap's <b>inrush</b> is a candidate trigger for another (a protective foldback). Both
+          diagnoses depend on facts nobody wrote down.
+        </p>
+      </div>
+
+      <div class="call">
+        <h3>Still open</h3>
+        <p>
+          The <b>connector is unidentified</b> — pitch unmeasured, part not matched. That is the gate
+          on connecting any of this to the appliance.
+        </p>
+        <p>
+          Also not documented here: the <b>XIAO's silkscreen-to-GPIO map</b> this whole
+          diagram rests on (<code>D3=GPIO21, D4=GPIO22, D2=GPIO2</code>). It checks out against
+          Seeed's published pinout — but if it were wrong, RX and TX would be silently swapped at the
+          pad level.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <footer>
+    <span><b>ECM owns ignition, flame sensing and the gas valve.</b> This device is a control path, never a safety device.</span>
+    <span>Port is powered only in <b>IFT-REM</b> — which is also the position where the fireplace can ignite.</span>
+  </footer>
+
+</div>

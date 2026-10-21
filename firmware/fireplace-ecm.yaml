@@ -1,0 +1,584 @@
+# fireplace-ecm.yaml — ESP32-S3 (Freenove ESP32-S3 WROOM / ESP32-S3-WROOM-1
+# N8R8) running as a replacement for the Heat & Glo IntelliFire Wi-Fi module
+# (WFM).
+#
+# The S3 target is the current build; the earlier ESP32-C6 build is the one with
+# the longer soak history. See README.md for the verified / unverified split
+# before connecting anything.
+#
+# The component answers the ECM's 9600-8-N-1 polls on the UART and carries
+# commands in the 0xBC reply's 4-byte data slot. The module is a POLLED SLAVE:
+# it never initiates a frame.
+#
+# Electrical connections to the ECM:
+#   GND (pin 8) + RX from pin 6 + TX to pin 4 through the 1 kΩ series
+#   resistor, + POWER from pin 3 (+5 V) — see README.md, "Power: from ECM pin 3".
+#
+# ⚠️ Powering from pin 3 couples this device's failure domain to the ECM's —
+#    a short, brownout or firmware hang becomes a disturbance on the ECM board.
+#    That is the accepted trade for reproducing the stock topology. It REQUIRES
+#    an inline fuse and bulk capacitance, and pin 3's current budget must be
+#    measured first.
+#
+# ⚠️ NEVER USB and pin 3 at the same time. The Freenove board has TWO USB
+#    ports (CH343 USB-UART and native USB-OTG), and its VBUS-to-5V-pin power
+#    path is not documented in this repo. Assume either port can backfeed the
+#    host; verify the schematic before ever combining them. Bench = USB.
+#    Installed = pin 3, flown OTA.
+#
+# The analyzer must still NEVER be clipped to pin 3 (it is a supply rail, not
+# a signal) — a separate rule that stays in force.
+
+esphome:
+  name: intellifire
+  friendly_name: IntelliFire
+  # REQUIRED. entity_id is derived as slugify(friendly_name + " " + name), so a
+  # MAC suffix would rename every entity below out from under Home Assistant.
+  name_add_mac_suffix: false
+
+  # ⚠ ORDERING IS LOAD-BEARING — do not "tidy" this away.
+  #
+  # A runtime MQTT broker override (stored by the set_mqtt_config service) has
+  # to be applied AFTER ESPHome's own codegen sets the compiled-in values, which
+  # happens during the MQTT component's setup at priority 200 (AFTER_WIFI).
+  # This component runs at 999 (BUS - 1, needed for the UART), so a restore
+  # attempted in its own setup() would be overwritten a moment later. 150 runs
+  # after 200, which is the whole point.
+  #
+  # If this block is deleted the override is silently ignored: the device would
+  # connect to the broker compiled in below and the stored values would look
+  # like they had no effect.
+  on_boot:
+    priority: 150
+    then:
+      - lambda: |-
+          id(fireplace)->apply_stored_mqtt_config();
+
+# Freenove ESP32-S3 WROOM. esp32-s3-devkitc-1 is the board entry the Stage-1
+# sniffer used on this exact board. The firmware uses no PSRAM (all buffers are
+# static internal RAM), so the N8R8-specific board entry buys nothing.
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  framework:
+    type: esp-idf
+
+# ---------------------------------------------------------------------------
+# The component itself. `path` is relative to this file, and ESPHome loads
+# local components ONLY through this block (it no longer auto-discovers a
+# sibling `components/` directory).
+# ---------------------------------------------------------------------------
+external_components:
+  - source:
+      type: local
+      path: components
+
+fireplace_ecm:
+  id: fireplace
+  uart_id: ecm_uart
+  # The write-enable sense line. LOW = enabled; the component reads the pin
+  # itself, immediately before building each write.
+  #
+  # GPIO1 on the Freenove ESP32-S3: free on the official pinout (ADC1_CH0/T1
+  # only) and below 32, which the component's write-enable guard requires. It
+  # is only ever tied to GND (or left open), so it cannot drive the ECM.
+  #
+  # ⚠️ GPIO2 is DISQUALIFIED on this board: it is the onboard "IO2" LED. An
+  # LED/resistor network can form a divider with the internal pull-up and park
+  # a floating pin in the indeterminate zone, so a cut sense wire could read
+  # LOW = ENABLED. That is fail-unsafe on a gas appliance.
+  #
+  # Avoid on ESP32-S3: strapping 0/3/45/46; native USB 19/20; flash/PSRAM
+  # 26-37; microSD 38-40; UART0 43/44; WS2812 48; camera 4-13/15-18.
+  write_enable_pin: 1
+
+# ---------------------------------------------------------------------------
+# Bus. 9600-8-N-1, lsb-first. Logs go to the USB-Serial-JTAG console so that
+# nothing this device says can appear on the ECM's RX line.
+# ---------------------------------------------------------------------------
+uart:
+  id: ecm_uart
+  # GPIO14/GPIO21 are free on this board.
+  # GPIO22 (the C6's RX) does not exist on the ESP32-S3: the chip has GPIO
+  # 0-21 and 26-48, and ESPHome rejects 22-25.
+  rx_pin:
+    number: GPIO14 # <- ECM pin 6 (the ECM's transmit)
+  tx_pin:
+    number: GPIO21 # -> ECM pin 4 (the module's transmit line), via 1 kΩ
+  baud_rate: 9600
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+# ---------------------------------------------------------------------------
+# Network. The ESP32 must NEVER reboot because the network went away: the ECM
+# polls continuously, and a device that reboots itself on a Wi-Fi blip takes
+# the fireplace's only slave down with it.
+#
+# NOTE especially: losing Wi-Fi or the API must never turn the fire off. There
+# is no fail-safe-to-off anywhere in this firmware. A network dropout leaves
+# the appliance exactly as it is; the wall keypad and the RF remote remain the
+# manual fallback.
+# ---------------------------------------------------------------------------
+wifi:
+  # ── NO STA CREDENTIALS HERE, DELIBERATELY ────────────────────────────────
+  # There is no `ssid:`/`password:` block. The device ships with no network
+  # credentials at all and comes up in AP mode, where `captive_portal:` below
+  # serves a page to enter them.
+  #
+  # Those credentials are then PERSISTED TO FLASH by ESPHome
+  # (wifi_component.cpp: `pref_.save()` + `global_preferences->sync()`) and
+  # loaded on every subsequent boot (`pref_.load()` at setup). So this is a
+  # one-time configuration, and no network password is ever stored in this
+  # repository or baked into the firmware image.
+  #
+  # ⚠️ `password:` without `ssid:` is a schema error, so if you ever add a
+  #    static network back, add BOTH.
+  #
+  # reboot_timeout: 0s — NEVER reboot because of Wi-Fi. The ECM must always
+  # have its slave; a Wi-Fi dropout must not take the bus down.
+  reboot_timeout: 0s
+  ap:
+    ssid: "IntelliFire Fallback"
+    password: !secret ap_password
+    # Bring the AP up IMMEDIATELY. The default is 90 s, which makes sense when
+    # there are stored credentials worth trying first — but there are none, so
+    # waiting 90 s would just be 90 s of nothing on first boot.
+    ap_timeout: 0s
+
+# Serves the configuration page on the fallback AP, so network credentials can
+# be entered from a phone without opening this file. Also the recovery path:
+# this device is destined for a steel cavity inside a fireplace, and without
+# this, a router or password change would mean physically retrieving it and
+# reflashing over USB.
+captive_portal:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  # Defaults to 15min, which would reboot the device when Home Assistant is
+  # merely unreachable. Same reasoning as wifi.reboot_timeout above.
+  reboot_timeout: 0s
+  services:
+    # Publish the whole recent-history ring to MQTT, chunk by chunk. This only
+    # SETS A FLAG — the dump is emitted from the main loop, a chunk per
+    # iteration, because publishing it synchronously would stall the bus.
+    #
+    # Use it to recover a window you were not watching when it happened, which
+    # is the failure mode that has cost the most time in this project.
+    - service: dump_telemetry
+      then:
+        - lambda: |-
+            id(fireplace)->request_dump();
+
+    # Change the MQTT broker WITHOUT editing this file or reflashing.
+    #
+    # ⚠ This REBOOTS the device. ESPHome's MQTT client has no public reconnect
+    # — it only re-establishes the socket once the current one drops — so a
+    # credential change cannot take effect in place. The values are written to
+    # flash first, so they survive the reboot and every reboot after it.
+    #
+    # The reboot is brief and safe here: the port stays powered because the
+    # 1 kΩ on pin 1 is passive, the ECM tolerates >= 4.8 s of a silent slave
+    # (measured), and intent is RAM-only so a boot writes nothing.
+    #
+    # To undo: erase the device (or call this with the YAML's own values). An
+    # erased device falls back to the broker compiled in below.
+    #
+    # From Home Assistant: Developer Tools -> Actions -> this service.
+    - service: set_mqtt_config
+      variables:
+        broker: string
+        port: int
+        username: string
+        password: string
+      then:
+        - lambda: |-
+            id(fireplace)->set_mqtt_config(broker, (uint16_t) port, username, password);
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# ---------------------------------------------------------------------------
+# MQTT — the live telemetry stream.
+#
+# A DIAGNOSTIC feed, not an entity namespace. It carries a record of every frame
+# this device sees or sends, a periodic opcode census, and an on-demand dump of
+# the recent-history ring. The point is that a fault can be reconstructed AFTER
+# the fact, instead of needing a logic analyser clipped to the board — which is
+# what the last one cost.
+#
+# The broker is the one Home Assistant already runs. Credentials live in
+# secrets.yaml (gitignored), because the device has to be told where the broker
+# is before it can publish anything — discovery included.
+mqtt:
+  broker: !secret mqtt_broker
+  username: !secret mqtt_username
+  password: !secret mqtt_password
+  # ⚠ discovery is OFF, deliberately. This device reaches Home Assistant over
+  # the native API, which is how its entities already appear. Turning MQTT
+  # discovery on as well makes Home Assistant create a SECOND set of the same
+  # entities from the broker — duplicates carrying _2 suffixes, which this
+  # project has already been bitten by once during cutover.
+  discovery: false
+  # ⚠ Same invariant as wifi: and api: — a broker outage must never reboot the
+  # device. This is ESPHome's third reboot_timeout and it defaulted to 15min
+  # because it was never set; a 15-minute broker outage would otherwise reboot
+  # the ECM's only slave.
+  #
+  # Trade-off, recorded deliberately: this removes the only watchdog on the MQTT
+  # stack. That is the same trade wifi:/api: already accept, and a wedged MQTT
+  # client is preferable to rebooting the slave.
+  reboot_timeout: 0s
+  # The component publishes under its own fixed root, `fireplace/ecm/...`, not
+  # under an ESPHome topic_prefix: it is a stream with its own consumer
+  # (tools/ecm_collector.py), not an entity namespace, and it should not move if
+  # the device is renamed. See TOPIC_ROOT in the component.
+  birth_message:
+    topic: fireplace/ecm/status
+    payload: online
+  will_message:
+    topic: fireplace/ecm/status
+    payload: offline
+
+# ⚠ Safe mode is DISABLED deliberately. ESPHome enters safe mode after a boot
+# crash loop, and safe mode does not start application components — which on
+# this device means the ECM's poll loop stops and its only slave goes silent.
+# A device that cannot poll is of no use here, and the recovery paths (OTA, the
+# native API) are still reachable in the normal boot window. If the device ever
+# does crash-loop, fix the cause; do not rely on safe mode to recover it.
+safe_mode:
+  disabled: true
+
+# ===========================================================================
+# Entities.
+#
+# Every writable entity is NON-OPTIMISTIC: its state is read back from the
+# ECM's own status frame somewhere below, so a command the appliance refuses
+# snaps back to the truth instead of lying to you.
+#
+# entity_id = slugify(friendly_name + " " + name), so with friendly_name
+# "IntelliFire", name "Flame Control" -> number.intellifire_flame_control.
+# ===========================================================================
+
+switch:
+  - platform: template
+    name: "Flame"
+    icon: mdi:fire
+    # NOT cosmetic. The default restore_mode would make the switch act on a
+    # default state during setup(), which fires turn_off_action and writes a
+    # flame-OFF command to the appliance on every single boot. DISABLED makes
+    # get_initial_state_with_restore_mode() return nothing, so setup() never
+    # touches the switch. A reboot must never re-command the fireplace.
+    restore_mode: DISABLED
+    optimistic: false
+    lambda: |-
+      if (!id(fireplace)->flame_known()) {
+        return {};
+      }
+      return id(fireplace)->flame_on();
+    turn_on_action:
+      - lambda: |-
+          id(fireplace)->request_flame(true);
+    turn_off_action:
+      - lambda: |-
+          id(fireplace)->request_flame(false);
+
+  # entity_id: switch.intellifire_pilot_light  (slugify("IntelliFire" + " " +
+  # "Pilot Light")) — the reference Home Assistant setup uses this name, so
+  # keep it stable if you copy that configuration.
+  #
+  # Write opcode 0x65, captured and verified on both transitions. The ECM
+  # answers ~0.18 s later with a 0xDF announcement, and status byte 5 reports
+  # the result, which is what this entity reads back.
+  #
+  # NON-OPTIMISTIC: the state below comes from the ECM's own status frame, so a
+  # command the appliance refuses snaps back to the truth.
+  #
+  # `restore_mode: DISABLED` is REQUIRED, for exactly the reason it is on the
+  # flame switch above: ESPHome's default restore mode makes the switch act on a
+  # default state during setup(), which fires turn_off_action and would write a
+  # pilot-OFF command to the appliance on EVERY boot. A reboot must never
+  # re-command the fireplace. Do not "simplify" it away.
+  #
+  # This switch does NOT enforce "pilot before flame" — the ECM owns the
+  # ignition interlock and the Home Assistant automation layer owns the policy.
+  # A flame-on with the pilot off is still written and reports the distinct
+  # outcome "flame requested but pilot reports off" (see README).
+  - platform: template
+    name: "Pilot Light"
+    icon: mdi:fire-circle
+    restore_mode: DISABLED
+    optimistic: false
+    lambda: |-
+      if (!id(fireplace)->pilot_known()) {
+        return {};
+      }
+      return id(fireplace)->pilot_on();
+    turn_on_action:
+      - lambda: |-
+          id(fireplace)->request_pilot(true);
+    turn_off_action:
+      - lambda: |-
+          id(fireplace)->request_pilot(false);
+
+number:
+  - platform: template
+    name: "Flame Control"
+    icon: mdi:fire
+    # 1-5 as the APP shows it. The wire carries 0-4 (internal = app - 1); the
+    # component does that conversion.
+    min_value: 1
+    max_value: 5
+    step: 1
+    optimistic: false
+    update_interval: 1s
+    lambda: |-
+      if (!id(fireplace)->height_known()) {
+        return {};
+      }
+      return id(fireplace)->height_app();
+    set_action:
+      - lambda: |-
+          id(fireplace)->request_height_app((int) x);
+
+sensor:
+  - platform: template
+    name: "Flame Height"
+    icon: mdi:fire
+    accuracy_decimals: 0
+    update_interval: 1s
+    lambda: |-
+      if (!id(fireplace)->height_known()) {
+        return {};
+      }
+      return id(fireplace)->height_app();
+
+  - platform: uptime
+    name: "Uptime"
+    update_interval: 60s
+
+  # ---- diagnostics ------------------------------------------------------
+  - platform: template
+    name: "Reply Latency"
+    unit_of_measurement: ms
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->reply_latency_ms();
+
+  - platform: template
+    name: "Ecm Frames"
+    icon: mdi:counter
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->ecm_frames();
+
+  - platform: template
+    name: "Crc Errors"
+    icon: mdi:alert-circle-outline
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->crc_errors();
+
+  - platform: template
+    name: "Unknown Commands"
+    icon: mdi:help-circle-outline
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->unknown_cmds();
+
+  # A core failure signal. If this metric climbs while the fireplace is idle,
+  # the ECM is rebooting.
+  - platform: template
+    name: "Ecm Resets"
+    icon: mdi:restart
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->ecm_resets();
+
+  # The ECM resets its exchange counter to 0 mid-stream after a UART overrun or
+  # a desynchronised byte stream. That is a LINK event, not a flame event:
+  # nothing in this firmware depends on seq, so an occasional count is expected
+  # and a burst means the link is repeatedly being torn down. The 0x20 boot
+  # frame is excluded, because `Ecm Resets` already counts it.
+  - platform: template
+    name: "Seq Resets"
+    icon: mdi:counter
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->seq_resets();
+
+  # Status bytes 6 and 8. The data path is proven; the human labels are not. Byte 6 is the byte slot
+  # 0x66 writes, byte 8 the heat-demand byte slots 0x64/0x68 write. Read-only
+  # diagnostics: no control decision uses either value.
+  - platform: template
+    name: "Status Config Byte"
+    icon: mdi:cog-outline
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      if (!id(fireplace)->config_byte_known()) {
+        return {};
+      }
+      return (float) id(fireplace)->config_byte();
+
+  - platform: template
+    name: "Heat Demand"
+    icon: mdi:thermometer-lines
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      if (!id(fireplace)->heat_demand_known()) {
+        return {};
+      }
+      return (float) id(fireplace)->heat_demand();
+
+  # ---- telemetry ---------------------------------------------------------
+  # Added sparingly, on purpose. The project's rule is that an entity which can
+  # never fire is worse than no entity at all — which is why there is deliberately
+  # NO "New Opcode" sensor here: no genuinely new opcode has ever been observed
+  # on this bus, so it would sit at zero forever. New opcodes are reported over
+  # MQTT instead, where the collector picks them up.
+  #
+  # `Ecm Frames` counts every CRC-valid frame INCLUDING ones the firmware then
+  # refuses to answer, so by itself it reads as healthy while the appliance is
+  # receiving silence. These two are what make that divergence visible.
+  - platform: template
+    name: "Frames Replied"
+    icon: mdi:reply
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->frames_replied();
+
+  # Non-zero means records were lost — the broker was unreachable, or the
+  # publish queue backed up further than the ring could hold. Unlike a "new
+  # opcode" counter this CAN legitimately fire, so it earns an entity.
+  - platform: template
+    name: "Records Dropped"
+    icon: mdi:database-alert-outline
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 5s
+    lambda: |-
+      return (float) id(fireplace)->publish_skipped();
+
+binary_sensor:
+  - platform: template
+    name: "Flame"
+    icon: mdi:fire
+    lambda: |-
+      if (!id(fireplace)->flame_known()) {
+        return {};
+      }
+      return id(fireplace)->flame_on();
+
+  - platform: template
+    name: "Pilot Light On"
+    icon: mdi:fire-circle
+    lambda: |-
+      return id(fireplace)->pilot_on();
+
+  # NOT "Hot". Byte 9 reports that a 32-bit tick deadline is armed, and no
+  # read site ties it to a thermostat or heat call. The inherited "hot" label was
+  # never supported, so this is an unnamed diagnostic flag. Renaming it changes
+  # the entity_id from binary_sensor.intellifire_hot.
+  - platform: template
+    name: "Status Flag 9"
+    icon: mdi:flag-outline
+    entity_category: diagnostic
+    lambda: |-
+      return id(fireplace)->status_flag9();
+
+  # The real fault alarm: no CRC-valid frame from the ECM for 5 s.
+  - platform: template
+    name: "Ecm Offline Error"
+    device_class: problem
+    lambda: |-
+      return !id(fireplace)->link_alive();
+
+  # ---- diagnostics ------------------------------------------------------
+  - platform: template
+    name: "Write Enable"
+    icon: mdi:toggle-switch-outline
+    entity_category: diagnostic
+    lambda: |-
+      return id(fireplace)->write_enabled();
+
+  - platform: template
+    name: "Command Fault"
+    device_class: problem
+    entity_category: diagnostic
+    lambda: |-
+      return id(fireplace)->fault_latched();
+
+text_sensor:
+  - platform: template
+    name: "Last Command Outcome"
+    icon: mdi:message-text-outline
+    entity_category: diagnostic
+    update_interval: 2s
+    lambda: |-
+      return id(fireplace)->last_outcome();
+
+button:
+  # A latched fault stops all writes until a human clears it — deliberately, so
+  # that a command which never lands is loud instead of silently retried
+  # forever. This is the way back.
+  - platform: template
+    name: "Clear Command Fault"
+    icon: mdi:restart-alert
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          id(fireplace)->clear_fault();
+
+  # Publish the recent-history ring to MQTT on demand. Same action as the
+  # `dump_telemetry` API service above, exposed as a button because a button is
+  # reachable from a phone at the fireplace and an API service is not.
+  #
+  # This is a real, always-available affordance — it can actually fire — which
+  # is what separates it from the "new opcode" entity this project deliberately
+  # refuses to add.
+  - platform: template
+    name: "Dump Telemetry"
+    icon: mdi:database-export-outline
+    entity_category: diagnostic
+    on_press:
+      - lambda: |-
+          id(fireplace)->request_dump();
+
+# ===========================================================================
+# Entities deliberately NOT created
+#
+#   binary_sensor.intellifire_flame_error
+#   binary_sensor.intellifire_pilot_flame_error
+#     The ECM's error encoding lives in the unmapped 0xDC payload bytes and has
+#     NEVER been decoded. A stub hardwired to `false` would be a
+#     silently-never-firing fault alarm, which is worse than no entity at all.
+#     These belong back only when the encoding is actually known.
+#
+#   (The pilot WRITE entity used to be listed here too, on the grounds that the
+#   pilot's write opcode was unknown. It is no longer unknown: opcode 0x65,
+#   captured and verified on both transitions — see switch.intellifire_pilot_light
+#   above.)
+#
+# Everything the ECM says that we do understand is exposed above; everything
+# else is left absent rather than guessed at.
+# ===========================================================================

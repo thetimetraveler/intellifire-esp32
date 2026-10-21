@@ -1,0 +1,1148 @@
+<title>IntelliFire ESP32</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="How the replacement ESP32-S3 answers the fireplace ECM's serial polls, and the one four-byte slot it can write.">
+<style>
+/* Design plan — open-source project page: neutral GitHub-like palette,
+   system UI text, monospace for code and identifiers, no display type.
+   ECM-originated paths are orange, module replies green, hazards red. */
+:root {
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --panel-2: #eaeef2;
+  --ink: #1f2328;
+  --muted: #57606a;
+  --line: #d0d7de;
+  --line-strong: #afb8c1;
+  --accent: #bc4c00;
+  --accent-soft: #fff1e5;
+  --module: #1a7f37;
+  --module-soft: #dafbe1;
+  --danger: #cf222e;
+  --danger-soft: #ffebe9;
+  --code-bg: #eff1f3;
+  --fig: #ffffff;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-display: var(--font-body);
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --measure: 74ch;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117;
+    --panel: #161b22;
+    --panel-2: #21262d;
+    --ink: #e6edf3;
+    --muted: #8b949e;
+    --line: #30363d;
+    --line-strong: #484f58;
+    --accent: #f0883e;
+    --accent-soft: #2b1d12;
+    --module: #3fb950;
+    --module-soft: #12261a;
+    --danger: #f85149;
+    --danger-soft: #2d1214;
+    --code-bg: #161b22;
+    --fig: #0d1117;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --panel: #161b22;
+  --panel-2: #21262d;
+  --ink: #e6edf3;
+  --muted: #8b949e;
+  --line: #30363d;
+  --line-strong: #484f58;
+  --accent: #f0883e;
+  --accent-soft: #2b1d12;
+  --module: #3fb950;
+  --module-soft: #12261a;
+  --danger: #f85149;
+  --danger-soft: #2d1214;
+  --code-bg: #161b22;
+  --fig: #0d1117;
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: 0 max(16px, env(safe-area-inset-left, 0px)) 64px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.shell { width: 100%; max-width: 880px; margin: 0 auto; }
+
+a { color: #0969da; text-underline-offset: 2px; }
+:root[data-theme="dark"] a { color: #58a6ff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) a { color: #58a6ff; } }
+:focus-visible { outline: 2px solid #0969da; outline-offset: 3px; }
+
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: .75rem;
+  color: var(--muted);
+}
+.masthead .ref { color: var(--muted); }
+
+.hero { display: block; padding: 36px 0 8px; }
+.kicker {
+  margin: 0 0 8px;
+  font-family: var(--font-mono);
+  font-size: .78rem;
+  color: var(--muted);
+}
+h1 {
+  margin: 0 0 12px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: clamp(1.6rem, 4.5vw, 2.1rem);
+  line-height: 1.25;
+  letter-spacing: -.01em;
+}
+h1 em { font-style: normal; }
+.lede {
+  max-width: var(--measure);
+  margin: 0 0 20px;
+  font-size: 1rem;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.lede strong { color: var(--ink); font-weight: 600; }
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: 16px 0 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.facts > div { min-width: 0; padding: 10px 14px; border-right: 1px solid var(--line); }
+.facts > div:last-child { border-right: 0; }
+.facts dt {
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  color: var(--muted);
+}
+.facts dd {
+  margin: 2px 0 0;
+  font-family: var(--font-mono);
+  font-size: .86rem;
+  line-height: 1.35;
+}
+.facts dd span {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-body);
+  font-size: .72rem;
+  color: var(--muted);
+}
+@media (max-width: 700px) {
+  .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .facts > div:nth-child(2) { border-right: 0; }
+  .facts > div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
+}
+
+.contents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--font-mono);
+  font-size: .78rem;
+}
+.contents a { color: var(--muted); text-decoration: none; }
+.contents a:hover, .contents a:focus-visible { color: var(--ink); text-decoration: underline; }
+.contents span { color: var(--muted); margin-right: 4px; }
+
+main { display: block; }
+.section { padding: 28px 0 0; margin-top: 32px; }
+.section-head { margin-bottom: 12px; }
+.eyebrow {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  color: var(--muted);
+}
+h2 {
+  margin: 0;
+  padding-bottom: 6px;
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 1.4rem;
+  line-height: 1.3;
+  border-bottom: 1px solid var(--line);
+}
+.prose { max-width: var(--measure); }
+.prose p { margin: 0 0 .85em; }
+.prose p:last-child { margin-bottom: 0; }
+code {
+  font-family: var(--font-mono);
+  font-size: .85em;
+  background: rgba(175, 184, 193, .2);
+  padding: .15em .35em;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+pre {
+  margin: 16px 0 0;
+  padding: 12px 14px;
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: .8rem;
+  line-height: 1.6;
+}
+pre code { background: none; padding: 0; white-space: pre; font-size: inherit; }
+
+.figure { margin: 20px 0 0; }
+.figframe {
+  position: relative;
+  padding: 26px 12px 10px;
+  background: var(--fig);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.figframe::before {
+  content: attr(data-fig);
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  font-family: var(--font-mono);
+  font-size: .68rem;
+  color: var(--muted);
+}
+.figure svg { display: block; width: 100%; height: auto; max-width: 620px; margin: 0 auto; }
+figcaption {
+  max-width: var(--measure);
+  margin-top: 8px;
+  font-size: .82rem;
+  line-height: 1.5;
+  color: var(--muted);
+}
+figcaption strong { color: var(--ink); font-weight: 600; }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  max-width: 620px;
+  margin: 8px auto 0;
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  color: var(--muted);
+}
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.legend i { display: inline-block; width: 20px; height: 2px; background: var(--accent); }
+.legend i.mod { background: var(--module); }
+
+.tablewrap {
+  margin: 16px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+  line-height: 1.5;
+}
+th {
+  padding: 7px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: .78rem;
+  color: var(--ink);
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+td { padding: 7px 12px; vertical-align: top; border-bottom: 1px solid var(--line); }
+td:first-child { white-space: nowrap; }
+tbody tr:last-child td { border-bottom: 0; }
+tbody tr:nth-child(2n) td { background: var(--panel); }
+
+.notes {
+  display: grid;
+  gap: 6px;
+  max-width: var(--measure);
+  margin: 14px 0 0;
+  padding-left: 22px;
+  font-size: .92rem;
+  color: var(--muted);
+}
+.notes li { padding-left: 2px; }
+.notes strong { color: var(--ink); font-weight: 600; }
+
+.note {
+  max-width: var(--measure);
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+}
+.note-title {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+.note p:last-child { margin: 0; font-size: .9rem; color: var(--muted); }
+.note p:last-child code { color: var(--ink); }
+
+.hazard {
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  background: var(--danger-soft);
+  border: 1px solid var(--danger);
+  border-left-width: 4px;
+  border-radius: 6px;
+}
+.hazard-tag {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--danger);
+}
+.hazard-range {
+  margin: 2px 0;
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--danger);
+}
+.hazard-desc { margin: 4px 0 0; font-size: .9rem; }
+.hazard-fig { display: block; margin: 12px 0 0; }
+.hazard-fig svg { display: block; width: 100%; max-width: 460px; height: auto; margin: 0; }
+
+.rules {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 18px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rules > div { min-width: 0; padding: 12px 14px; background: var(--panel); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.rules > div:nth-child(2n) { border-right: 0; }
+.rules > div:nth-last-child(-n+2) { border-bottom: 0; }
+.rules h3 {
+  margin: 0 0 4px;
+  font-family: var(--font-mono);
+  font-size: .84rem;
+  font-weight: 600;
+}
+.rules h3 span { margin-right: 8px; color: var(--muted); }
+.rules p { margin: 0; font-size: .86rem; line-height: 1.55; color: var(--muted); }
+@media (max-width: 700px) {
+  .rules { grid-template-columns: 1fr; }
+  .rules > div { border-right: 0; }
+  .rules > div:nth-last-child(2) { border-bottom: 1px solid var(--line); }
+}
+
+.limits {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  margin: 18px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.limits > div { min-width: 0; padding: 12px 14px; background: var(--panel); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.limits > div:nth-child(2n) { border-right: 0; }
+.limits > div:nth-last-child(-n+2) { border-bottom: 0; }
+.limits dt {
+  margin: 0 0 3px;
+  font-family: var(--font-mono);
+  font-size: .8rem;
+  font-weight: 600;
+}
+.limits dd { margin: 0; font-size: .88rem; line-height: 1.55; color: var(--muted); }
+@media (max-width: 700px) {
+  .limits { grid-template-columns: 1fr; }
+  .limits > div { border-right: 0; }
+  .limits > div:nth-last-child(2) { border-bottom: 1px solid var(--line); }
+}
+
+.closing {
+  max-width: var(--measure);
+  margin: 20px 0 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.foot {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  margin-top: 40px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  color: var(--muted);
+}
+
+/* Inline SVG. Page-level styles only; nothing is styled inside the SVG fragment. */
+.dg { color: var(--ink); font-family: var(--font-body); }
+.dg text { fill: currentColor; }
+.dg .t-title { font-family: var(--font-display); font-size: 13px; font-weight: 600; }
+.dg .t-title-s { font-family: var(--font-display); font-size: 11.5px; font-weight: 600; }
+.dg .t-body { font-size: 10.5px; }
+.dg .t-body-mut { font-size: 10.5px; fill: var(--muted); }
+.dg .t-small { font-family: var(--font-mono); font-size: 8.5px; fill: var(--muted); }
+.dg .t-mono { font-family: var(--font-mono); font-size: 9.5px; fill: var(--muted); }
+.dg .t-mono-ink { font-family: var(--font-mono); font-size: 9.5px; fill: var(--ink); }
+.dg .t-micro { font-family: var(--font-mono); font-size: 8px; fill: var(--accent); }
+.dg .t-micro-mut { font-family: var(--font-mono); font-size: 8px; fill: var(--muted); }
+.dg .t-micro-mod { font-family: var(--font-mono); font-size: 8px; fill: var(--module); }
+.dg .t-micro-acc { font-family: var(--font-mono); font-size: 8px; fill: var(--accent); }
+.dg .t-label { font-family: var(--font-mono); font-size: 8px; letter-spacing: .08em; fill: var(--muted); }
+.dg .t-label-acc { font-family: var(--font-mono); font-size: 8px; letter-spacing: .08em; fill: var(--accent); }
+.dg .t-label-mod { font-family: var(--font-mono); font-size: 8px; letter-spacing: .08em; fill: var(--module); }
+.dg .t-label-danger { font-family: var(--font-mono); font-size: 8px; letter-spacing: .08em; fill: var(--danger); }
+.dg .t-num { font-family: var(--font-mono); font-size: 8.5px; fill: var(--accent); }
+.dg .t-det { font-family: var(--font-mono); font-size: 9.5px; fill: var(--muted); }
+.dg .t-byte { font-family: var(--font-mono); font-size: 9px; fill: var(--ink); }
+.dg .t-byte-acc { font-family: var(--font-mono); font-size: 9px; font-weight: 500; fill: var(--accent); }
+.dg .card-t { font-family: var(--font-body); font-size: 10px; fill: var(--ink); }
+.dg .card-idx { font-family: var(--font-mono); font-size: 9px; font-weight: 500; fill: var(--accent); }
+
+.dg .box { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.dg .box-mod { fill: var(--module-soft); stroke: var(--module); stroke-width: 1; }
+.dg .box-danger { fill: var(--danger-soft); stroke: var(--danger); stroke-width: 1; }
+.dg .gate { fill: var(--bg); stroke: var(--accent); stroke-width: 1.3; }
+.dg .badge-used { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+.dg .badge-off { fill: var(--bg); stroke: var(--line); stroke-width: 1; }
+.dg .pill { fill: var(--accent-soft); stroke: var(--accent); stroke-width: .8; }
+.dg .pill-t { font-family: var(--font-mono); font-size: 7px; letter-spacing: .06em; fill: var(--accent); }
+.dg .pin-num { font-family: var(--font-mono); font-size: 9px; font-weight: 500; fill: var(--accent); }
+.dg .pin-num-off { font-family: var(--font-mono); font-size: 9px; fill: var(--muted); }
+.dg .line { fill: none; stroke: currentColor; stroke-width: 1.1; }
+.dg .line-acc { stroke: var(--accent); }
+.dg .line-mod { stroke: var(--module); }
+.dg .line-mut { stroke: var(--muted); }
+.dg .line-danger { stroke: var(--danger); }
+.dg .dash { stroke-dasharray: 4 4; }
+.dg .lifeline { fill: none; stroke: var(--line-strong); stroke-width: 1; stroke-dasharray: 2 5; }
+.dg .res { fill: none; stroke: var(--accent); stroke-width: 1.2; }
+.dg .arrow-acc { fill: var(--accent); }
+.dg .arrow-mod { fill: var(--module); }
+.dg .arrow-mut { fill: var(--muted); }
+.dg .arrow-ink { fill: var(--ink); }
+.dg .arrow-danger { fill: var(--danger); }
+.dg .cell { fill: var(--bg); stroke: var(--line); stroke-width: .7; }
+.dg .cell-acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: .9; }
+.dg .hatch-line { stroke: var(--danger); stroke-width: 1.4; opacity: .45; }
+.dg .cross { stroke: var(--danger); stroke-width: 1.6; }
+</style>
+
+<div class="shell">
+  <header class="masthead">
+    <span>intellifire-esp32</span>
+    <span class="ref">ESPHome · ESP32-S3</span>
+  </header>
+
+  <section class="hero">
+    <p class="kicker">Replacement Wi-Fi module for IntelliFire IFT 2.0</p>
+    <h1>intellifire-esp32</h1>
+    <p class="lede">The stock Wi-Fi module in this fireplace reboots roughly every 26 minutes. This project replaces it with an ESP32-S3 running ESPHome. The board sits on the ECM's 8-pin Wi-Fi port, answers the ECM's serial polls, and never initiates a frame. The only write path is a four-byte slot inside the reply to the <code>0x02BC</code> poll.</p>
+    <dl class="facts">
+      <div>
+        <dt>board</dt>
+        <dd>Freenove ESP32-S3<span>WROOM · 8 MB flash</span></dd>
+      </div>
+      <div>
+        <dt>firmware</dt>
+        <dd>ESPHome<span>2026.6.5 · ESP-IDF</span></dd>
+      </div>
+      <div>
+        <dt>link</dt>
+        <dd>9600 8-N-1<span>LSB first · 3.3 V logic</span></dd>
+      </div>
+      <div>
+        <dt>poll</dt>
+        <dd>~2.7 / s<span>ECM-initiated · 0.764 s</span></dd>
+      </div>
+    </dl>
+    <nav aria-label="Contents">
+      <ul class="contents">
+        <li><a href="#link"><span>01</span>wiring</a></li>
+        <li><a href="#exchange"><span>02</span>protocol</a></li>
+        <li><a href="#write"><span>03</span>write channel</a></li>
+        <li><a href="#firmware"><span>04</span>firmware</a></li>
+        <li><a href="#hazard"><span>05</span>safety</a></li>
+        <li><a href="#status"><span>06</span>status frame</a></li>
+        <li><a href="#build"><span>07</span>build</a></li>
+        <li><a href="#boundary"><span>08</span>limitations</a></li>
+      </ul>
+    </nav>
+  </section>
+
+  <main>
+    <section class="section" aria-labelledby="link">
+      <div class="section-head">
+        <p class="eyebrow">01 · hardware</p>
+        <h2 id="link">Wiring</h2>
+      </div>
+      <div class="prose">
+        <p>The ECM exposes an 8-pin Wi-Fi port. Five pins are used: 1, 3, 4, 6 and 8. Pin 1 is a presence gate and must be pulled low through 1 kΩ to ground; without that strap the ECM never energises pin 3. Pin 3 is a fused 5 V rail (0.5–1 A, with bulk capacitance) and feeds the board's 5V pad. Pin 4 takes the ESP32's TX through a 1 kΩ series resistor. Pin 6 is the ECM's TX into GPIO14 and must never be driven. Pin 8 is the ground.</p>
+        <p>Pin 2 reads about 0 V but is not the return. Pin 5 is unresolved. Pin 7 is unconnected. On the board: RX GPIO14, TX GPIO21, write-enable sense GPIO1. The link is 9600 baud, 8-N-1, LSB first, 3.3 V logic on the ESP32 side.</p>
+      </div>
+
+      <figure class="figure">
+        <div class="figframe" data-fig="FIG. 1">
+          <svg class="dg" viewBox="0 0 360 532" role="img" aria-labelledby="fig1-t">
+            <title id="fig1-t">Topology: the IntelliFire ECM's 8-pin Wi-Fi port connects five pins to a Freenove ESP32-S3, which reaches Home Assistant and an MQTT broker over Wi-Fi.</title>
+            <defs>
+              <marker id="m1-acc" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-acc" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+              <marker id="m1-mut" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-mut" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+              <marker id="m1-ink" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-ink" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+            </defs>
+
+            <rect class="box" x="16" y="8" width="328" height="58" rx="2"/>
+            <text class="t-title" x="180" y="32" text-anchor="middle">IntelliFire ECM</text>
+            <text class="t-mono" x="180" y="50" text-anchor="middle">PIC24EP256GP206 · ignition · gas valve</text>
+            <line class="line line-acc" x1="180" y1="66" x2="180" y2="94" marker-end="url(#m1-acc)"/>
+
+            <rect class="box" x="8" y="100" width="344" height="208" rx="2"/>
+            <text class="t-label" x="20" y="119">8-PIN WI-FI PORT</text>
+            <text class="t-label" x="340" y="119" text-anchor="end">5 USED · 3 NOT</text>
+
+            <rect class="badge-used" x="16" y="131" width="20" height="20" rx="2"/>
+            <text class="pin-num" x="26" y="145" text-anchor="middle">1</text>
+            <text class="t-body" x="46" y="146">Presence gate</text>
+            <line class="res" x1="46" y1="155" x2="49" y2="155"/>
+            <rect class="res" x="49" y="152" width="12" height="6"/>
+            <line class="res" x1="61" y1="155" x2="66" y2="155"/>
+            <text class="t-micro" x="70" y="159">1 kΩ to GND</text>
+
+            <rect class="badge-off" x="16" y="169" width="20" height="20" rx="2"/>
+            <text class="pin-num-off" x="26" y="183" text-anchor="middle">2</text>
+            <text class="t-body-mut" x="46" y="184">No return</text>
+            <text class="t-small" x="46" y="197">reads ~0 V</text>
+
+            <rect class="badge-used" x="16" y="207" width="20" height="20" rx="2"/>
+            <text class="pin-num" x="26" y="221" text-anchor="middle">3</text>
+            <text class="t-body" x="46" y="222">+5 V supply</text>
+            <text class="t-small" x="46" y="235">fused, bulk cap</text>
+
+            <rect class="badge-used" x="16" y="245" width="20" height="20" rx="2"/>
+            <text class="pin-num" x="26" y="259" text-anchor="middle">4</text>
+            <text class="t-body" x="46" y="260">ECM RX</text>
+            <line class="res" x1="46" y1="269" x2="49" y2="269"/>
+            <rect class="res" x="49" y="266" width="12" height="6"/>
+            <line class="res" x1="61" y1="269" x2="66" y2="269"/>
+            <text class="t-micro" x="70" y="273">1 kΩ from GPIO21</text>
+
+            <rect class="badge-off" x="180" y="131" width="20" height="20" rx="2"/>
+            <text class="pin-num-off" x="190" y="145" text-anchor="middle">5</text>
+            <text class="t-body-mut" x="210" y="146">Unresolved</text>
+            <text class="t-small" x="210" y="159">do not assume</text>
+
+            <rect class="badge-used" x="180" y="169" width="20" height="20" rx="2"/>
+            <text class="pin-num" x="190" y="183" text-anchor="middle">6</text>
+            <text class="t-body" x="210" y="184">ECM TX</text>
+            <text class="t-small" x="210" y="197">GPIO14 · never drive</text>
+
+            <rect class="badge-off" x="180" y="207" width="20" height="20" rx="2"/>
+            <text class="pin-num-off" x="190" y="221" text-anchor="middle">7</text>
+            <text class="t-body-mut" x="210" y="222">Not connected</text>
+
+            <rect class="badge-used" x="180" y="245" width="20" height="20" rx="2"/>
+            <text class="pin-num" x="190" y="259" text-anchor="middle">8</text>
+            <text class="t-body" x="210" y="260">GND</text>
+            <text class="t-small" x="210" y="273">the return used</text>
+
+            <line class="line" x1="180" y1="308" x2="180" y2="334" marker-end="url(#m1-ink)"/>
+            <text class="t-micro-mut" x="188" y="326">5 V · GND · RX · TX</text>
+
+            <rect class="box" x="16" y="336" width="328" height="82" rx="2"/>
+            <text class="t-title" x="28" y="360">Freenove ESP32-S3 WROOM</text>
+            <rect class="pill" x="262" y="346" width="72" height="16" rx="8"/>
+            <text class="pill-t" x="298" y="357" text-anchor="middle">POLLED SLAVE</text>
+            <text class="t-mono" x="28" y="380">GPIO14 RX · GPIO21 TX · GPIO1 sense</text>
+            <text class="t-mono" x="28" y="398">3.3 V logic · 9600 8-N-1 · LSB first</text>
+
+            <line class="line line-mut dash" x1="180" y1="418" x2="180" y2="436"/>
+            <line class="line line-mut dash" x1="94" y1="436" x2="266" y2="436"/>
+            <line class="line line-mut dash" x1="94" y1="436" x2="94" y2="450" marker-end="url(#m1-mut)"/>
+            <line class="line line-mut dash" x1="266" y1="436" x2="266" y2="450" marker-end="url(#m1-mut)"/>
+            <text class="t-micro-mut" x="188" y="432">2.4 GHz Wi-Fi</text>
+
+            <rect class="box" x="12" y="452" width="164" height="68" rx="2"/>
+            <text class="t-title-s" x="94" y="474" text-anchor="middle">Home Assistant</text>
+            <text class="t-mono" x="94" y="492" text-anchor="middle">ESPHome native API</text>
+            <text class="t-mono" x="94" y="508" text-anchor="middle">controls + state</text>
+
+            <rect class="box" x="184" y="452" width="164" height="68" rx="2"/>
+            <text class="t-title-s" x="266" y="474" text-anchor="middle">MQTT broker</text>
+            <text class="t-mono" x="266" y="492" text-anchor="middle">fireplace/ecm/…</text>
+            <text class="t-mono" x="266" y="508" text-anchor="middle">telemetry + census</text>
+          </svg>
+        </div>
+        <figcaption><strong>Figure 1.</strong> The ECM, its 8-pin port, and the replacement module. Pins 1, 3, 4, 6 and 8 carry the link; both 1 kΩ resistors sit on the module side. The only path into the appliance is the UART on pin 4.</figcaption>
+      </figure>
+
+      <ul class="notes">
+        <li><strong>Pin 6 is an ECM output.</strong> It is the ECM's transmit line and must never be driven.</li>
+        <li><strong>Pin 2 is not ground.</strong> It reads ~0 V, but the return is pin 8.</li>
+        <li><strong>Pin 5 is unresolved.</strong> Leave it unconnected until it has been measured.</li>
+      </ul>
+    </section>
+
+    <section class="section" aria-labelledby="exchange">
+      <div class="section-head">
+        <p class="eyebrow">02 · protocol</p>
+        <h2 id="exchange">Exchange model</h2>
+      </div>
+      <div class="prose">
+        <p>The ECM opens every exchange. It polls about 2.7 times a second — roughly every 0.764 s — with command <code>0x02BC</code>, which asks for four bytes. The module replies with the same sequence number and the same command, carrying the four-byte slot. The ECM owns the counter; a reply that changes the sequence number is not a reply.</p>
+        <p>About 0.18 s after a slot command the ECM announces what changed. Every 1.11 s, on its own schedule, it sends the <code>0x00DC</code> status frame. The next poll starts at least 158.6 ms after the previous frame ends, median 340 ms. A 12-byte reply drains in about 12.5 ms, leaving roughly 10× headroom.</p>
+      </div>
+
+      <figure class="figure">
+        <div class="figframe" data-fig="FIG. 2">
+          <svg class="dg" viewBox="0 0 360 580" role="img" aria-labelledby="fig2-t">
+            <title id="fig2-t">Sequence: the ECM polls, the module replies with the same sequence and command, the ECM announces the change, then emits status; the module never sends an unsolicited frame.</title>
+            <defs>
+              <marker id="m2-acc" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-acc" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+              <marker id="m2-mod" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-mod" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+              <marker id="m2-danger" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-danger" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+            </defs>
+
+            <rect class="box" x="6" y="8" width="148" height="48" rx="2"/>
+            <text class="t-title-s" x="80" y="30" text-anchor="middle">IntelliFire ECM</text>
+            <text class="t-micro-acc" x="80" y="46" text-anchor="middle">POLL MASTER</text>
+
+            <rect class="box-mod" x="206" y="8" width="148" height="48" rx="2"/>
+            <text class="t-title-s" x="280" y="30" text-anchor="middle">ESP32-S3</text>
+            <text class="t-micro-mod" x="280" y="46" text-anchor="middle">POLLED SLAVE</text>
+
+            <line class="lifeline" x1="80" y1="56" x2="80" y2="508"/>
+            <line class="lifeline" x1="280" y1="56" x2="280" y2="508"/>
+
+            <text class="t-label-acc" x="180" y="94" text-anchor="middle">POLL · ECM INITIATES</text>
+            <text class="t-mono-ink" x="180" y="108" text-anchor="middle">4B 02 seq BC 02 04 CRC</text>
+            <line class="line line-acc" x1="84" y1="118" x2="272" y2="118" marker-end="url(#m2-acc)"/>
+
+            <text class="t-label-mod" x="180" y="160" text-anchor="middle">REPLY · MODULE ANSWERS</text>
+            <text class="t-mono-ink" x="180" y="174" text-anchor="middle">4B 04 seq BC 02 04 slot CRC</text>
+            <line class="line line-mod" x1="276" y1="184" x2="88" y2="184" marker-end="url(#m2-mod)"/>
+            <text class="t-small" x="180" y="200" text-anchor="middle">same seq · same command · four slot bytes</text>
+
+            <text class="t-label-acc" x="180" y="252" text-anchor="middle">ANNOUNCEMENT · +0.18 S</text>
+            <text class="t-mono-ink" x="180" y="266" text-anchor="middle">0xE4 · 0xDF · 0xE1</text>
+            <line class="line line-acc" x1="84" y1="276" x2="272" y2="276" marker-end="url(#m2-acc)"/>
+            <text class="t-small" x="180" y="292" text-anchor="middle">not an ack · fires unconditionally</text>
+
+            <text class="t-label-acc" x="180" y="348" text-anchor="middle">STATUS · EVERY 1.11 S</text>
+            <text class="t-mono-ink" x="180" y="362" text-anchor="middle">command DC 00 · 31 bytes</text>
+            <line class="line line-acc" x1="84" y1="372" x2="272" y2="372" marker-end="url(#m2-acc)"/>
+            <text class="t-small" x="180" y="388" text-anchor="middle">23 data · the only acknowledgement</text>
+
+            <text class="t-label-acc" x="180" y="442" text-anchor="middle">NEXT POLL · ONE CYCLE LATER</text>
+            <text class="t-mono-ink" x="180" y="456" text-anchor="middle">~0.764 s</text>
+            <line class="line line-acc" x1="84" y1="466" x2="272" y2="466" marker-end="url(#m2-acc)"/>
+            <text class="t-small" x="180" y="482" text-anchor="middle">≥ 158.6 ms gap before the next frame</text>
+
+            <rect class="box-danger" x="6" y="518" width="348" height="52" rx="2"/>
+            <text class="t-label-danger" x="16" y="534">NO MODULE-ORIGINATED FRAME</text>
+            <line class="line line-danger dash" x1="272" y1="553" x2="88" y2="553" marker-end="url(#m2-danger)"/>
+            <path class="cross" d="M175,547 L185,557 M185,547 L175,557"/>
+          </svg>
+        </div>
+        <figcaption><strong>Figure 2.</strong> One exchange, top to bottom. The ECM opens it. The module's only outbound frame is the reply; announcements and status frames also come from the ECM.</figcaption>
+      </figure>
+      <div class="legend" aria-hidden="true">
+        <span><i></i>ECM to module</span>
+        <span><i class="mod"></i>module to ECM</span>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th scope="col">field</th><th scope="col">meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>4B</code></td><td>Start byte. Every frame begins with it.</td></tr>
+            <tr><td><code>type</code></td><td><code>1</code> announcement · <code>2</code> request · <code>3</code> module ack · <code>4</code> module reply.</td></tr>
+            <tr><td><code>seq</code></td><td>Owned by the ECM. Copy it into the reply; nothing else.</td></tr>
+            <tr><td><code>cmd_lo</code>, <code>cmd_hi</code></td><td>16-bit command word, little-endian. The ECM compares <code>(byte4 &lt;&lt; 8) | byte3</code>.</td></tr>
+            <tr><td><code>payload…</code></td><td>Depends on the command. The <code>0x02BC</code> reply carries the four-byte slot.</td></tr>
+            <tr><td><code>CRC16-LE</code></td><td>CRC-16/MODBUS — reflected <code>0xA001</code>, init <code>0xFFFF</code>, computed from <code>4B</code> inclusive, little-endian.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="note">
+        <p class="note-title">Announcements are not acknowledgements</p>
+        <p><code>0xE4</code> (flame), <code>0xDF</code> (pilot) and <code>0xE1</code> (height) fire about 0.18 s after a slot command, every time, even when the handler did nothing. The <code>0x00DC</code> status frame is the only acknowledgement.</p>
+      </aside>
+    </section>
+
+    <section class="section" aria-labelledby="write">
+      <div class="section-head">
+        <p class="eyebrow">03 · write channel</p>
+        <h2 id="write">Command slot</h2>
+      </div>
+      <div class="prose">
+        <p>The <code>0x02BC</code> poll asks for exactly four bytes. The payload is <code>&lt;opcode&gt; 00 &lt;value&gt; 00</code>; <code>00 00 00 00</code> is idle. Nothing else on the link changes appliance state, and the reconciler puts at most one slot in each reply.</p>
+      </div>
+
+      <figure class="figure">
+        <div class="figframe" data-fig="FIG. 3">
+          <svg class="dg" viewBox="0 0 360 196" role="img" aria-labelledby="fig3-t">
+            <title id="fig3-t">Reply layout: a six-byte header, the four-byte command slot, and a two-byte CRC; the slot expands to opcode, zero, value, zero.</title>
+            <defs>
+              <marker id="m3-acc" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-acc" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+            </defs>
+
+            <text class="t-label" x="6" y="14">REPLY · 12 BYTES</text>
+            <text class="t-label" x="354" y="14" text-anchor="end">≤ 1 WRITE / POLL</text>
+
+            <rect class="cell" x="15" y="24" width="25" height="36"/>
+            <text class="t-byte" x="27.5" y="47" text-anchor="middle">4B</text>
+            <rect class="cell" x="42" y="24" width="25" height="36"/>
+            <text class="t-byte" x="54.5" y="47" text-anchor="middle">04</text>
+            <rect class="cell" x="69" y="24" width="25" height="36"/>
+            <text class="t-byte" x="81.5" y="47" text-anchor="middle">seq</text>
+            <rect class="cell" x="96" y="24" width="25" height="36"/>
+            <text class="t-byte" x="108.5" y="47" text-anchor="middle">BC</text>
+            <rect class="cell" x="123" y="24" width="25" height="36"/>
+            <text class="t-byte" x="135.5" y="47" text-anchor="middle">02</text>
+            <rect class="cell" x="150" y="24" width="25" height="36"/>
+            <text class="t-byte" x="162.5" y="47" text-anchor="middle">04</text>
+            <rect class="cell-acc" x="177" y="24" width="25" height="36"/>
+            <text class="t-byte-acc" x="189.5" y="47" text-anchor="middle">s0</text>
+            <rect class="cell-acc" x="204" y="24" width="25" height="36"/>
+            <text class="t-byte-acc" x="216.5" y="47" text-anchor="middle">s1</text>
+            <rect class="cell-acc" x="231" y="24" width="25" height="36"/>
+            <text class="t-byte-acc" x="243.5" y="47" text-anchor="middle">s2</text>
+            <rect class="cell-acc" x="258" y="24" width="25" height="36"/>
+            <text class="t-byte-acc" x="270.5" y="47" text-anchor="middle">s3</text>
+            <rect class="cell" x="285" y="24" width="25" height="36"/>
+            <text class="t-byte" x="297.5" y="47" text-anchor="middle">crcL</text>
+            <rect class="cell" x="312" y="24" width="25" height="36"/>
+            <text class="t-byte" x="324.5" y="47" text-anchor="middle">crcH</text>
+
+            <path class="line line-mut" d="M15,64 V68 M15,66 H175 M175,64 V68"/>
+            <path class="line line-acc" d="M177,64 V68 M177,66 H283 M283,64 V68"/>
+            <path class="line line-mut" d="M285,64 V68 M285,66 H337 M337,64 V68"/>
+            <text class="t-label" x="95" y="80" text-anchor="middle">header</text>
+            <text class="t-label-acc" x="222" y="80" text-anchor="end">4-byte slot</text>
+            <text class="t-label" x="311" y="80" text-anchor="middle">CRC</text>
+
+            <text class="t-label-acc" x="6" y="98">SLOT · s0–s3</text>
+
+            <rect class="cell" x="50" y="104" width="62" height="50"/>
+            <text class="t-label-acc" x="56" y="116">s0</text>
+            <text class="t-byte" x="81" y="134" text-anchor="middle">opcode</text>
+            <text class="t-small" x="81" y="147" text-anchor="middle">64 / 65 / 67</text>
+
+            <rect class="cell" x="116" y="104" width="62" height="50"/>
+            <text class="t-label" x="122" y="116">s1</text>
+            <text class="t-byte" x="147" y="134" text-anchor="middle">00</text>
+
+            <rect class="cell" x="182" y="104" width="62" height="50"/>
+            <text class="t-label-acc" x="188" y="116">s2</text>
+            <text class="t-byte" x="213" y="134" text-anchor="middle">value</text>
+            <text class="t-small" x="213" y="147" text-anchor="middle">01 / 00 / 0–4</text>
+
+            <rect class="cell" x="248" y="104" width="62" height="50"/>
+            <text class="t-label" x="254" y="116">s3</text>
+            <text class="t-byte" x="279" y="134" text-anchor="middle">00</text>
+
+            <text class="t-micro" x="6" y="174">0x64 flame · 0x65 pilot · 0x67 height</text>
+            <text class="t-small" x="6" y="190">idle = 00 00 00 00</text>
+          </svg>
+        </div>
+        <figcaption><strong>Figure 3.</strong> The 12-byte reply and the four-byte slot. The opcode selects the control; the third byte carries the value.</figcaption>
+      </figure>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th scope="col">opcode</th><th scope="col">control</th><th scope="col">value</th><th scope="col">notes</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>0x64</code></td><td>flame</td><td><code>01</code> on · <code>00</code> off</td><td>Implemented.</td></tr>
+            <tr><td><code>0x65</code></td><td>pilot</td><td><code>01</code> on · <code>00</code> off</td><td>Implemented. Only bit 0 is effective.</td></tr>
+            <tr><td><code>0x67</code></td><td>height</td><td><code>0</code>–<code>4</code> internal</td><td>Implemented. The app shows 1–5. Written only while flame is on.</td></tr>
+            <tr><td><code>0x6E</code></td><td>countdown</td><td>seconds</td><td>Documented, not implemented, never observed.</td></tr>
+            <tr><td><code>00</code></td><td>idle</td><td><code>00 00 00 00</code></td><td>No command carried.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="note">
+        <p class="note-title">Three opcodes in the emit path</p>
+        <p>The ECM has handlers for <code>0x66</code> and <code>0x68</code>–<code>0x6F</code>, but the stock module never emits them and this firmware does not either. Only <code>0x64</code>, <code>0x65</code> and <code>0x67</code> are reachable from Home Assistant.</p>
+      </aside>
+    </section>
+
+    <section class="section" aria-labelledby="firmware">
+      <div class="section-head">
+        <p class="eyebrow">04 · firmware</p>
+        <h2 id="firmware">Reply pipeline</h2>
+      </div>
+      <div class="prose">
+        <p>The reply path runs in a fixed order. The write-enable gate sits on the wire between the reconciler and the UART, not in Home Assistant. Telemetry taps both directions but publishes at the end of the loop iteration, after the reply has gone out.</p>
+      </div>
+
+      <figure class="figure">
+        <div class="figframe" data-fig="FIG. 4">
+          <svg class="dg" viewBox="0 0 360 680" role="img" aria-labelledby="fig4-t">
+            <title id="fig4-t">Pipeline: receive, parse, reconcile, pass the write-enable gate, transmit; telemetry and Home Assistant are side channels.</title>
+            <defs>
+              <marker id="m4-acc" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-acc" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+              <marker id="m4-mut" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-mut" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+              <marker id="m4-ink" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+                <path class="arrow-ink" d="M0,0 L8,4 L0,8 Z"/>
+              </marker>
+            </defs>
+
+            <path class="line line-acc" d="M36,624 H20 V226 H36" marker-start="url(#m4-acc)" marker-end="url(#m4-acc)"/>
+
+            <path class="line line-mut dash" d="M324,50 H340 V470 H180 V482" marker-end="url(#m4-mut)"/>
+            <path class="line line-mut dash" d="M324,130 H340"/>
+            <path class="line line-mut dash" d="M324,400 H340"/>
+            <circle cx="324" cy="50" r="2.2" fill="var(--muted)"/>
+            <circle cx="324" cy="130" r="2.2" fill="var(--muted)"/>
+            <circle cx="324" cy="400" r="2.2" fill="var(--muted)"/>
+            <rect class="box" x="36" y="18" width="288" height="64" rx="2"/>
+            <text class="t-num" x="40" y="34">01</text>
+            <text class="t-title-s" x="62" y="34">FrameAssembler</text>
+            <text class="t-det" x="50" y="56">UART RX GPIO14 · frames on an 8 ms idle gap</text>
+            <text class="t-det" x="50" y="70">0x4B inside a payload is data, not a delimiter</text>
+
+            <rect class="box" x="36" y="98" width="288" height="64" rx="2"/>
+            <text class="t-num" x="40" y="114">02</text>
+            <text class="t-title-s" x="62" y="114">protocol core</text>
+            <text class="t-det" x="50" y="136">CRC-16/MODBUS · parse · 16-bit command match</text>
+            <text class="t-det" x="50" y="150">build the reply for the same seq + command</text>
+
+            <rect class="box" x="36" y="178" width="288" height="96" rx="2"/>
+            <text class="t-num" x="40" y="194">03</text>
+            <text class="t-title-s" x="62" y="194">reconciler</text>
+            <text class="t-det" x="50" y="216">desired {flame, pilot, height} starts UNKNOWN</text>
+            <text class="t-det" x="50" y="230">≤ 1 write per poll · flame → pilot → height</text>
+            <text class="t-det" x="50" y="244">height only while flame on · retries 2 s apart</text>
+            <text class="t-det" x="50" y="258">4 attempts in 8 s, then latch a command fault</text>
+
+            <path class="line" d="M190,274 V304"/>
+            <rect class="gate" x="166" y="304" width="48" height="34" rx="3"/>
+            <text class="t-micro" x="190" y="325" text-anchor="middle">GATE</text>
+
+            <path class="line line-acc" d="M190,288 C136,300 136,346 190,358"/>
+            <circle cx="190" cy="358" r="2.5" fill="var(--accent)"/>
+            <text class="t-small" x="130" y="332" text-anchor="end">OFF bypass</text>
+
+            <text class="t-num" x="40" y="288">04</text>
+            <text class="t-title-s" x="62" y="288">write-enable gate</text>
+            <text class="t-small" x="40" y="302">re-read each write</text>
+
+            <rect class="box" x="252" y="282" width="72" height="52" rx="2"/>
+            <text class="t-mono-ink" x="260" y="298">GPIO1</text>
+            <text class="t-micro-acc" x="260" y="312">LOW = enabled</text>
+            <text class="t-small" x="260" y="326">OFF exempt</text>
+            <path class="line line-acc" d="M252,321 H218" marker-end="url(#m4-acc)"/>
+
+            <line class="line line-acc" x1="190" y1="338" x2="190" y2="368" marker-end="url(#m4-acc)"/>
+
+            <rect class="box" x="36" y="368" width="288" height="64" rx="2"/>
+            <text class="t-num" x="40" y="384">05</text>
+            <text class="t-title-s" x="62" y="384">UART TX · GPIO21</text>
+            <text class="t-det" x="50" y="406">1 kΩ series → ECM pin 4</text>
+            <text class="t-det" x="50" y="420">12-byte reply in ~12.5 ms · ~10× headroom</text>
+
+            <rect class="box" x="36" y="484" width="288" height="76" rx="2"/>
+            <text class="t-num" x="40" y="500">06</text>
+            <text class="t-title-s" x="62" y="500">telemetry side channel</text>
+            <text class="t-det" x="50" y="520">RAM ring, both directions · opcode census</text>
+            <text class="t-det" x="50" y="534">MQTT fireplace/ecm/… · publish runs last</text>
+            <text class="t-det" x="50" y="548">after the reply is already written</text>
+
+            <rect class="box" x="36" y="584" width="288" height="80" rx="2"/>
+            <text class="t-num" x="40" y="600">07</text>
+            <text class="t-title-s" x="62" y="600">Home Assistant · ESPHome API</text>
+            <text class="t-det" x="50" y="620">switch.flame · switch.pilot_light</text>
+            <text class="t-det" x="50" y="634">number.flame_control · binary sensors</text>
+            <text class="t-det" x="50" y="648">clear-fault · dump-telemetry</text>
+          </svg>
+        </div>
+        <figcaption><strong>Figure 4.</strong> Stages 1–5 are the reply path. The gate is on the TX wire, not beside it. Telemetry is the dashed tap that publishes last; Home Assistant feeds the reconciler and reads the result.</figcaption>
+      </figure>
+
+      <div class="rules">
+        <div>
+          <h3><span>03</span>reconciler</h3>
+          <p>All three desired values start as unknown, so a boot writes nothing. One write per poll, in fixed order: flame → pilot → height. Height is written only while flame is on. A failed write retries 2 s later; after four attempts in 8 s the firmware latches a command fault.</p>
+        </div>
+        <div>
+          <h3><span>04</span>write-enable gate</h3>
+          <p>GPIO1 is re-read immediately before each write. Low is enabled, high is disabled. OFF commands are exempt and pass.</p>
+        </div>
+        <div>
+          <h3><span>06</span>telemetry</h3>
+          <p>A bounded RAM ring holds both directions. The firmware keeps an opcode census and publishes it to MQTT under <code>fireplace/ecm/…</code>. Publishing runs at the end of the loop, after the reply is written, so it cannot delay the poll.</p>
+        </div>
+        <div>
+          <h3><span>07</span>home assistant</h3>
+          <p>The ESPHome native API exposes the controls and state. Commands go into the reconciler; state and diagnostics come back through the same API.</p>
+        </div>
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr><th scope="col">domain</th><th scope="col">entities</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>switch</td><td><code>switch.flame</code>, <code>switch.pilot_light</code></td></tr>
+            <tr><td>number</td><td><code>number.flame_control</code></td></tr>
+            <tr><td>binary_sensor</td><td>flame, pilot, offline, status flag 9, write enable, command fault</td></tr>
+            <tr><td>sensor</td><td>flame height, uptime, diagnostics</td></tr>
+            <tr><td>text_sensor</td><td><code>last_command_outcome</code></td></tr>
+            <tr><td>button</td><td>clear-fault, dump-telemetry</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="hazard">
+      <div class="section-head">
+        <p class="eyebrow">05 · safety</p>
+        <h2 id="hazard">Schedule IDs</h2>
+      </div>
+      <div class="prose">
+        <p><code>0xC8</code>–<code>0xFF</code> is 56 weekly-schedule IDs. Sending one programs a future actuator change. They are not control commands, and there is no reason to send one.</p>
+      </div>
+
+      <aside class="hazard">
+        <p class="hazard-tag">do not send</p>
+        <p class="hazard-range">0xC8–0xFF</p>
+        <p class="hazard-desc">56 weekly-schedule IDs. The firmware will never send them.</p>
+        <figure class="hazard-fig">
+          <svg class="dg" viewBox="0 0 360 100" role="img" aria-label="Opcode range: implemented writes sit at 0x64 to 0x67; the final 56 ids from 0xC8 to 0xFF are schedule entries that must never be sent.">
+            <defs>
+              <pattern id="m5-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                <line class="hatch-line" x1="0" y1="0" x2="0" y2="6"/>
+              </pattern>
+            </defs>
+            <text class="t-label" x="6" y="12">OPCODE RANGE</text>
+            <text class="t-label-danger" x="354" y="12" text-anchor="end">0xC8–0xFF · 56 ids</text>
+            <rect class="box" x="6" y="28" width="348" height="24"/>
+            <rect class="box-danger" x="278" y="28" width="76" height="24"/>
+            <rect x="278" y="28" width="76" height="24" fill="url(#m5-hatch)"/>
+            <rect class="cell-acc" x="142" y="28" width="6" height="24"/>
+            <path class="line line-acc" d="M145,52 V78 H151"/>
+            <text class="t-micro" x="155" y="82">0x64–0x67 implemented</text>
+            <text class="t-label" x="6" y="68">0x00</text>
+            <text class="t-label-acc" x="139" y="68" text-anchor="end">0x64</text>
+            <text class="t-label" x="278" y="68" text-anchor="middle">0xC8</text>
+            <text class="t-label" x="354" y="68" text-anchor="end">0xFF</text>
+          </svg>
+        </figure>
+      </aside>
+
+      <ul class="notes">
+        <li><strong>Not observed from the stock module.</strong> The slot range extends beyond the implemented opcodes, but <code>0x66</code> and <code>0x68</code>–<code>0x6F</code> stay out of the emit path here.</li>
+        <li><strong><code>0x68</code> can raise internal fault 6.</strong></li>
+        <li><strong><code>0x69</code>, <code>0x6B</code> and <code>0x6C</code></strong> can reach the flame-level path.</li>
+      </ul>
+    </section>
+
+    <section class="section" aria-labelledby="status">
+      <div class="section-head">
+        <p class="eyebrow">06 · status frame</p>
+        <h2 id="status">Status frame</h2>
+      </div>
+      <div class="prose">
+        <p><code>0x00DC</code> arrives about every 1.11 s: 31 bytes, 23 of them data. It is the only acknowledgement in the protocol, and it runs on its own cadence rather than answering a particular poll. These six capture indices are the ones the firmware maps.</p>
+      </div>
+
+      <figure class="figure">
+        <div class="figframe" data-fig="FIG. 5">
+          <svg class="dg" viewBox="0 0 360 206" role="img" aria-labelledby="fig5-t">
+            <title id="fig5-t">Status frame of 31 bytes with indices 5 through 10 highlighted: pilot, config, height, heat demand, deadline-armed flag, and flame.</title>
+            <text class="t-label" x="6" y="12">0xDC · 31 BYTES · 23 DATA</text>
+            <path class="line line-acc" d="M62,28 V32 M62,30 H128 M128,28 V32"/>
+            <text class="t-micro" x="95" y="24" text-anchor="middle">5–10</text>
+
+            <rect class="cell" x="6" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="17.2" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="28.4" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="39.6" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="50.8" y="34" width="10.2" height="28"/>
+            <rect class="cell-acc" x="62" y="34" width="10.2" height="28"/>
+            <rect class="cell-acc" x="73.2" y="34" width="10.2" height="28"/>
+            <rect class="cell-acc" x="84.4" y="34" width="10.2" height="28"/>
+            <rect class="cell-acc" x="95.6" y="34" width="10.2" height="28"/>
+            <rect class="cell-acc" x="106.8" y="34" width="10.2" height="28"/>
+            <rect class="cell-acc" x="118" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="129.2" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="140.4" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="151.6" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="162.8" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="174" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="185.2" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="196.4" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="207.6" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="218.8" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="230" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="241.2" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="252.4" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="263.6" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="274.8" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="286" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="297.2" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="308.4" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="319.6" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="330.8" y="34" width="10.2" height="28"/>
+            <rect class="cell" x="342" y="34" width="10.2" height="28"/>
+
+            <text class="t-label" x="11.1" y="78" text-anchor="middle">0</text>
+            <text class="t-label-acc" x="67.1" y="78" text-anchor="middle">5</text>
+            <text class="t-label-acc" x="123.1" y="78" text-anchor="middle">10</text>
+            <text class="t-label" x="179.1" y="78" text-anchor="middle">15</text>
+            <text class="t-label" x="235.1" y="78" text-anchor="middle">20</text>
+            <text class="t-label" x="291.1" y="78" text-anchor="middle">25</text>
+            <text class="t-label" x="347.1" y="78" text-anchor="middle">30</text>
+
+            <rect class="box" x="6" y="94" width="112" height="40" rx="2"/>
+            <text class="card-t" x="16" y="118"><tspan class="card-idx">5</tspan><tspan dx="6">pilot</tspan></text>
+            <rect class="box" x="124" y="94" width="112" height="40" rx="2"/>
+            <text class="card-t" x="134" y="118"><tspan class="card-idx">6</tspan><tspan dx="6">config byte</tspan></text>
+            <rect class="box" x="242" y="94" width="112" height="40" rx="2"/>
+            <text class="card-t" x="252" y="118"><tspan class="card-idx">7</tspan><tspan dx="6">height</tspan></text>
+
+            <rect class="box" x="6" y="140" width="112" height="40" rx="2"/>
+            <text class="card-t" x="16" y="164"><tspan class="card-idx">8</tspan><tspan dx="6">heat demand</tspan></text>
+            <rect class="box" x="124" y="140" width="112" height="40" rx="2"/>
+            <text class="card-t" x="134" y="164"><tspan class="card-idx">9</tspan><tspan dx="6">deadline-armed</tspan></text>
+            <rect class="box" x="242" y="140" width="112" height="40" rx="2"/>
+            <text class="card-t" x="252" y="164"><tspan class="card-idx">10</tspan><tspan dx="6">flame</tspan></text>
+
+            <text class="t-small" x="6" y="196">Index 9 is deadline-armed, not “hot”.</text>
+          </svg>
+        </div>
+        <figcaption><strong>Figure 5.</strong> The 31-byte status frame, with the six capture indices the firmware reads. The rest of the payload is unassigned here.</figcaption>
+      </figure>
+
+      <aside class="note">
+        <p class="note-title">Index 9 is the deadline flag</p>
+        <p>It was previously labelled “hot”. It isn't: the byte only reports that a 32-bit deadline is armed. Index 10 is the flame byte.</p>
+      </aside>
+    </section>
+
+    <section class="section" aria-labelledby="build">
+      <div class="section-head">
+        <p class="eyebrow">07 · build</p>
+        <h2 id="build">Build and flash</h2>
+      </div>
+      <div class="prose">
+        <p>ESPHome resolves the component through the <code>external_components:</code> block; a sibling <code>components/</code> directory is not discovered automatically. The config expects <code>firmware/secrets.yaml</code> with <code>ap_password</code>, <code>api_encryption_key</code>, <code>ota_password</code>, <code>mqtt_broker</code>, <code>mqtt_username</code> and <code>mqtt_password</code>. There is deliberately no station Wi-Fi block: the device starts in AP mode and uses the captive portal to obtain credentials.</p>
+        <p>Validate the YAML before compiling. The host tests below run on a laptop against recorded captures and need no hardware.</p>
+      </div>
+
+      <pre><code>cd firmware
+
+esphome config fireplace-ecm.yaml    # validate schema, components and entity ids
+esphome compile fireplace-ecm.yaml
+esphome run fireplace-ecm.yaml --device /dev/cu.usbmodemXXXX</code></pre>
+
+      <pre><code>clang++ -std=c++20 -O1 -o /tmp/ecm_host_test test/ecm_host_test.cpp
+/tmp/ecm_host_test ../captures      # protocol core + 6,145-frame replay
+clang++ -std=c++20 -O1 -o /tmp/ecm_reconciler_test test/ecm_reconciler_test.cpp
+/tmp/ecm_reconciler_test           # write-decision policy</code></pre>
+
+      <ul class="notes">
+        <li><strong>Flash over the native USB-OTG port.</strong> The logger runs on USB_SERIAL_JTAG; the CH343 port needs an extra driver on macOS.</li>
+        <li><strong>One module on the bus at a time.</strong> A second powered module collides on mDNS and MQTT, and two slaves would both answer on pin 4.</li>
+        <li><strong>The C6 and the S3 do not share an image.</strong> The current target is the ESP32-S3. Never OTA a C6 build to it.</li>
+      </ul>
+    </section>
+
+    <section class="section" aria-labelledby="boundary">
+      <div class="section-head">
+        <p class="eyebrow">08 · limitations</p>
+        <h2 id="boundary">Scope</h2>
+      </div>
+
+      <dl class="limits">
+        <div>
+          <dt>ignition and gas</dt>
+          <dd>The ECM owns ignition, flame sensing and the gas valve. The ESP32 can request an action; it cannot bypass any of them.</dd>
+        </div>
+        <div>
+          <dt>pilot interlock</dt>
+          <dd>There is no pilot-before-flame interlock in the firmware, by design. That sequence lives in Home Assistant.</dd>
+        </div>
+        <div>
+          <dt>9-hour deadline</dt>
+          <dd>The deadline is extended only by slot-command activity. <code>0xBC</code> polls do not extend it.</dd>
+        </div>
+        <div>
+          <dt>fault codes</dt>
+          <dd>The ECM's fault codes stay inside the ECM. The module can latch its own command fault; it cannot read the ECM's.</dd>
+        </div>
+      </dl>
+
+      <p class="closing">This project changes how the appliance is asked. It does not change what the ECM will allow.</p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>IntelliFire IFT 2.0 · ESP32-S3 replacement</span>
+    <span>Built from bus captures, pin measurements, and the ECM firmware</span>
+  </footer>
+</div>

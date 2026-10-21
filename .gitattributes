@@ -1,0 +1,12 @@
+* text=auto eol=lf
+
+*.jsonl text
+*.md text
+*.html text
+*.yaml text
+*.yml text
+*.py text
+*.cpp text
+*.h text
+*.vcd text
+*.sr binary

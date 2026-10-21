@@ -1,0 +1,823 @@
+{
+  "_comment": "Experiment matrix for the ECM<->WFM serial sweep. DATA ONLY - no executable logic lives here. An orchestrator reads this file, captures D0/D1 for the run's capture_s, fires each mark's HA action at its offset_s from capture start, polls /poll every poll_cadence_s, and diffs the frames before vs after each mark. Background: docs/FRAME_FORMAT.md (framing + CRC), docs/PROTOCOL_DECODED.md (what is already confirmed), docs/ECM_PORT_PINOUT.md (hardware), and the stock module's /poll endpoint (read-path answer key). Mark offsets are relative to capture start, never absolute clock times.",
+  "schema_version": "1.0.0",
+  "matrix_id": "ecm-sweep-001",
+  "description": "Fire known Home Assistant actions against the fireplace while capturing the ECM<->WFM UART, so that each command/payload byte can be tied to an observable state change. The framing layer is already solved; this matrix exists to solve SEMANTICS.",
+  "answer_key": {
+    "url": "http://192.0.2.10/poll",
+    "method": "GET",
+    "write_path_warning": "NEVER call POST /post. It is the write path and every field it can change drives the real fireplace. Stage 1 is listen-only.",
+    "role": "Ground truth for what the fireplace was actually doing when a frame appeared. Every mark names the /poll field transition it expects.",
+    "fields_of_interest": [
+      "power",
+      "pilot",
+      "height",
+      "timer",
+      "timeremaining",
+      "uptime",
+      "downtime",
+      "ecm_latency",
+      "errors"
+    ],
+    "uptime_is_the_reboot_detector": "A FALL in /poll uptime means the module rebooted. Log it for every sample: a reboot mid-run produces frame deltas that are NOT action-induced and must not be attributed to the mark.",
+    "field_semantics_caveat": "In the last known idle sample /poll reported power=1 with height=0 and the flame off. So 'power' is probably 'unit powered', not 'flame lit', and the transitions in this matrix are HYPOTHESISED (basis field on each mark). Record what is actually observed; do not force the observed value to match the expectation."
+  },
+  "ha_entities": {
+    "flame": {
+      "entity_id": "switch.intellifire_flame",
+      "type": "switch",
+      "values": [
+        "on",
+        "off"
+      ]
+    },
+    "height": {
+      "entity_id": "number.intellifire_flame_control",
+      "type": "number",
+      "min": 1,
+      "max": 5,
+      "step": 1
+    },
+    "pilot": {
+      "entity_id": "switch.intellifire_pilot_light",
+      "type": "switch",
+      "values": [
+        "on",
+        "off"
+      ]
+    }
+  },
+  "action_vocabulary": [
+    "noop",
+    "flame_on",
+    "flame_off",
+    "height",
+    "pilot_on",
+    "pilot_off"
+  ],
+  "action_definitions": {
+    "noop": {
+      "description": "Fire nothing; hold the observation window open. Used as a within-run control so a quiet window can be compared against a stimulus window.",
+      "target": null,
+      "service": null,
+      "takes_value": false
+    },
+    "flame_on": {
+      "description": "Turn the main flame on. Kicks off the ECM ignition sequence (spark + flame sense, ~90 s to lockout if it fails). Counts as one ignition.",
+      "target": "switch.intellifire_flame",
+      "service": "switch.turn_on",
+      "takes_value": false
+    },
+    "flame_off": {
+      "description": "Turn the main flame off. Does not extinguish the pilot.",
+      "target": "switch.intellifire_flame",
+      "service": "switch.turn_off",
+      "takes_value": false
+    },
+    "height": {
+      "description": "Set flame height (1-5). Only meaningful with the flame already lit; this is the multi-valued field the sweep is trying to decode.",
+      "target": "number.intellifire_flame_control",
+      "service": "number.set_value",
+      "takes_value": true,
+      "value_range": [
+        1,
+        5
+      ]
+    },
+    "pilot_on": {
+      "description": "Turn the standing pilot on. Leaves the pilot lit for later ignition attempts.",
+      "target": "switch.intellifire_pilot_light",
+      "service": "switch.turn_on",
+      "takes_value": false
+    },
+    "pilot_off": {
+      "description": "Turn the standing pilot off.",
+      "target": "switch.intellifire_pilot_light",
+      "service": "switch.turn_off",
+      "takes_value": false
+    }
+  },
+  "poll": {
+    "url": "http://192.0.2.10/poll",
+    "cadence_s": 0.5,
+    "timeout_s": 8,
+    "log_uptime": true,
+    "store_raw_json": true
+  },
+  "defaults": {
+    "pre_window_s": 10,
+    "settle_s": 60,
+    "post_mark_s": 20,
+    "capture_s": 50,
+    "samplerate": "1m",
+    "samplerate_hz": 1000000,
+    "channels": [
+      "D0",
+      "D1"
+    ],
+    "channel_pins": {
+      "D0": "ECM pin 6 (ECM TX candidate)",
+      "D1": "ECM pin 4 (second data candidate)"
+    },
+    "baud": 9600,
+    "framing": "8-N-1",
+    "bit_order": "lsb-first",
+    "analyzer_driver": "fx2lafw",
+    "poll_cadence_s": 0.5,
+    "capture_tool": "tools/ecm_capture.sh",
+    "parser": "tools/ecm_frames.py"
+  },
+  "preflight": [
+    "Analyzer GND to ECM pin 2 or 8, connected FIRST and removed LAST.",
+    "NEVER clip pin 3 - it is the +5 V supply and will damage a 5.25 V-limited analyzer.",
+    "Selector in IFT-REM, or the fireplace cannot ignite for the onoff and ladder runs.",
+    "RF remote batteries OUT, so a stray button press cannot inject an unexplained ignition.",
+    "Confirm /poll responds before starting; it is the answer key and a run without it is wasted.",
+    "\u26d4 PILOT MUST BE LIT BEFORE ANY flame_on. /poll pilot must read 1. The standing pilot is a PREREQUISITE for ignition on this appliance - the HA keypad automation itself refuses to start the flame with the pilot off ('Cannot start fireplace. The pilot light is not on.'). Established by run-0b-establish-pilot, which is why it runs before every flame run.",
+    "\u26a0\ufe0f THE PILOT TAKES TIME TO ESTABLISH. Confirmed on hardware 2026-10-16: HA reported 'state change could not be verified' while /poll already read pilot=1, i.e. the physical pilot lit later than HA's optimistic timeout. Wait for /poll pilot==1 for SEVERAL consecutive reads before attempting an ignition; do not trust the service call's return.",
+    "Record /poll uptime immediately before and after every run, to isolate module reboots."
+  ],
+  "run_order_note": "The runs array is in the approved plan's numeric order (ids 0-6). The execution_order field is authoritative. The two disagree only at the end: reboot_window (id 6) is PASSIVE and fires no marks, and pilot (id 5) is deliberately executed LAST because a lit pilot is what makes a later ignition reliable. Swapping those two is safe either way, but do not move pilot earlier.",
+  "safety": {
+    "description": "Hard limits for the whole sweep. The orchestrator MUST abort when any max_ is reached. This is a gas appliance: the ECM owns ignition, flame sensing and the gas valve, and nothing in this matrix writes to the fireplace except the three HA entities above.",
+    "max_ignitions": 6,
+    "max_runtime_s": 3600,
+    "max_consecutive_failures": 2,
+    "ignition_counting": "An ignition is a main-burner light-off: flame_on on a flame that is off, or the first flame_on of a run group. pilot_on is the standing pilot, not a main-burner ignition, and is not counted against max_ignitions.",
+    "planned_ignition_total": 5,
+    "planned_runtime_s": 1550,
+    "between_run_reset": [
+      {
+        "action": "flame_off",
+        "target": "switch.intellifire_flame",
+        "description": "Return the flame to off before the next run so every run starts from a known state."
+      },
+      {
+        "action": "cancel_timer",
+        "target": "timer.fireplace_safety_timer",
+        "service": "timer.cancel",
+        "description": "Cancel the safety shutoff timer so it cannot fire mid-run and produce an unexplained flame_off."
+      },
+      {
+        "action": "ensure_pilot_on",
+        "target": "switch.intellifire_pilot_light",
+        "service": "switch.turn_on",
+        "description": "The pilot MUST be lit for any flame run. Turn it ON if off and confirm via /poll, rather than 'restoring' a remembered state.",
+        "note": "Never turn the pilot OFF between runs - it is the ignition prerequisite, and it also takes time to re-establish."
+      }
+    ],
+    "between_run_reset_after_final": [
+      {
+        "action": "flame_off",
+        "target": "switch.intellifire_flame",
+        "description": "Always end with the burner off."
+      },
+      {
+        "action": "cancel_timer",
+        "target": "timer.fireplace_safety_timer"
+      },
+      {
+        "note": "The pilot is deliberately LEFT LIT unless the operator says otherwise - it must be re-established before any future ignition run, and it takes time. The operator's decision on 2026-10-16 was to leave it on."
+      }
+    ],
+    "between_run_reset_after_final_note": "The reset is deliberately NOT applied after the final run (pilot): it must be left lit, which is the whole reason pilot runs last.",
+    "stop_conditions": [
+      "Any /poll uptime FALL during a run: note the reboot, mark the run as contaminated, and continue.",
+      "Two consecutive runs producing no capture file or an empty decode: abort.",
+      "Any unexplained flame_on or ignition the orchestrator did not command: abort immediately.",
+      "Observed ignition count reaches max_ignitions: abort.",
+      "Elapsed runtime reaches max_runtime_s: abort.",
+      "ECM fault indicated by /poll errors becoming non-empty: abort and leave the unit alone."
+    ],
+    "never_do": [
+      "POST /post on the module",
+      "Probe or clip ECM pin 3 (+5 V)",
+      "Run any mark out of order within a run without restarting the run"
+    ]
+  },
+  "known_confounders": [
+    {
+      "id": "reboot_cadence_overlaps_sweep",
+      "severity": "high",
+      "description": "The module reboots roughly every 26 minutes and the whole sweep is planned at about 26 minutes (planned_runtime_s 1550). The sweep will very likely contain at least one module reboot.",
+      "mitigation": "Log /poll uptime with every poll. A reboot shows up as the 0x4B startup handshake plus a seq discontinuity. Exclude reboot windows from the per-mark diff, and record them in verification.reboots_detected_during_sweep."
+    },
+    {
+      "id": "control_mode_reconnect",
+      "severity": "medium",
+      "description": "The HA intellifire integration re-polls and reconnects on its own schedule, so frames appear with no action behind them.",
+      "mitigation": "idle_control (run 1) quantifies exactly this. Any delta it produces is the noise floor and must be subtracted from the stimulus runs."
+    },
+    {
+      "id": "ignition_latency",
+      "severity": "medium",
+      "description": "Flame_on begins an ignition sequence that takes seconds to minutes and may not light at all (~90 s to lockout).",
+      "mitigation": "post_mark_s of 20 s covers the command being emitted, not the whole ignition. Correlate the FRAME with the command; correlate the /poll power transition with the ignition separately, and allow up to 90 s for it."
+    },
+    {
+      "id": "four_and_nine_hour_timer",
+      "severity": "low",
+      "description": "A safety shutoff timer can turn the flame off on its own, which would look like an action-induced delta.",
+      "mitigation": "Cancel timer.fireplace_safety_timer between runs."
+    }
+  ],
+  "runs": [
+    {
+      "id": "run-0-settle",
+      "run_index": 0,
+      "name": "settle",
+      "execution_order": 0,
+      "type": "passive",
+      "discard": true,
+      "description": "Warm-up capture with no marks. Absorbs the reconnect and re-poll burst that follows the previous session's teardown so it lands in a discarded capture rather than a measured one.",
+      "capture_s": 40,
+      "marks": [],
+      "repetitions": 1,
+      "ignitions": 0,
+      "between_reps": [],
+      "rationale": "No preconditions and no stimuli, so this run cannot establish anything on its own. Its value is negative: whatever it captures while nothing is commanded is the environmental chatter the stimulus runs must be compared against. It runs first so the control-mode reconnect settles before run 1."
+    },
+    {
+      "id": "run-0b-establish-pilot",
+      "run_index": 0.5,
+      "name": "establish_pilot",
+      "execution_order": 1,
+      "type": "precondition",
+      "discard": false,
+      "description": "Light the standing pilot and capture that transition. This is a PRECONDITION for every flame run, not merely a test - without it flame_on cannot ignite.",
+      "capture_s": 60,
+      "repetitions": 1,
+      "ignitions": 0,
+      "between_reps": [],
+      "marks": [
+        {
+          "offset_s": 10,
+          "action": "pilot_on",
+          "value": null,
+          "precondition": {
+            "text": "pilot off",
+            "flame": "off",
+            "pilot": 0,
+            "height": null
+          },
+          "expected_poll": {
+            "field": "pilot",
+            "from": 0,
+            "to": 1,
+            "basis": "observed",
+            "note": "allow well over 30 s; the pilot may light later than HA's timeout"
+          },
+          "observe_s": 45,
+          "note": "Pilot transitions are slow. Do not advance until /poll reads pilot=1 on several consecutive samples."
+        }
+      ],
+      "rationale": "Added 2026-10-16 after the first supervised ignition: the matrix originally ran pilot_on/pilot_off LAST, as a thing to test, while the flame and ladder runs issued flame_on at +10 s with no pilot established. Every ignition run would have failed to light. The pilot is a prerequisite, so it is established first and the sweep's own capture records the transition."
+    },
+    {
+      "id": "run-1-idle-control",
+      "run_index": 1,
+      "name": "idle_control",
+      "execution_order": 2,
+      "type": "control",
+      "discard": false,
+      "description": "MANDATORY negative control. No marks for the whole capture, repeated three times, at the same duration as the onoff run.",
+      "capture_s": 50,
+      "marks": [],
+      "repetitions": 3,
+      "ignitions": 0,
+      "between_reps": [],
+      "rationale": "Nothing is commanded, so any frame that changes between the pre-window and post-window of this run is by definition NOT action-induced. That makes this the noise floor for the entire sweep: if this run reports deltas, every apparent effect elsewhere is suspect until it exceeds them. capture_s deliberately matches run-2 (onoff) so the two are directly comparable, and three repetitions give a variance estimate rather than a single sample. This run gates the rest - do not skip it and do not shorten it."
+    },
+    {
+      "id": "run-2-onoff",
+      "run_index": 2,
+      "name": "onoff",
+      "execution_order": 3,
+      "type": "stimulus",
+      "discard": false,
+      "description": "Flame on at +10 s, flame off at +28 s (+18 s after the on). One ignition per repetition.",
+      "capture_s": 50,
+      "marks": [
+        {
+          "offset_s": 10,
+          "action": "flame_on",
+          "value": null,
+          "precondition": {
+            "text": "flame off, pilot on, no pending action from run 1",
+            "flame": "off",
+            "pilot": "on",
+            "height": null
+          },
+          "expected_poll": {
+            "field": "power",
+            "from": 0,
+            "to": 1,
+            "basis": "hypothesised",
+            "note": "Expected direction of change; an idle sample has shown power=1 with the flame off, so record what is actually seen rather than forcing this."
+          },
+          "observe_s": 18,
+          "note": "Ignition sequence starts here. The frame carrying the command should appear within a few hundred ms; the /poll transition may lag by seconds. observe_s is 18 rather than the default 20 because the approved plan fixes flame_off at +18 s: the two marks are deliberately close so that on and off are captured within one short window, and the frame evidence is what matters, not the ignition settling. The flame_off mark still gets its full 20 s."
+        },
+        {
+          "offset_s": 28,
+          "action": "flame_off",
+          "value": null,
+          "precondition": {
+            "text": "flame on, commanded 18 s earlier",
+            "flame": "on",
+            "pilot": "on",
+            "height": null
+          },
+          "expected_poll": {
+            "field": "power",
+            "from": 1,
+            "to": 0,
+            "basis": "hypothesised",
+            "note": "Companion to the flame_on transition; the pair is what distinguishes an on-command from an off-command in the same command byte."
+          },
+          "observe_s": 20,
+          "note": "Fires 18 s after flame_on, which is long enough for ignition to have completed or failed. If ignition failed, the off command is still emitted and still comparable - record the ignition outcome alongside."
+        }
+      ],
+      "repetitions": 3,
+      "ignitions": 3,
+      "between_reps": [
+        "flame_off"
+      ],
+      "rationale": "The highest-value single experiment: on and off are two opposite, unambiguous states, so any frame that appears on one and not the other is the flame command. Three repetitions because a single on/off pair cannot separate the command from one-off chatter, and because ignition is not guaranteed to succeed every time. One ignition per repetition, hence 3 toward max_ignitions. between_reps forces flame_off so each repetition starts from the same known state. The 18 s spacing between the two marks departs from the 20 s post-window default, but no default is consumed twice: pre_window_s 10 + the 18 s interval + flame_off's 20 s = 48 s, which fits inside capture_s 50 with 2 s to spare. Note this is only 2 s of margin, so if the orchestrator ever lengthens a mark's overhead, capture_s must grow with it."
+    },
+    {
+      "id": "run-3-height-ladder",
+      "run_index": 3,
+      "name": "height_ladder",
+      "execution_order": 4,
+      "type": "stimulus",
+      "discard": false,
+      "description": "Flame on at +10 s, then the height ladder 1..5 repeated three times within ONE capture: +30..+110 (pass 1), +130..+210 (pass 2), +230..+310 (pass 3). One ignition; 15 height observations; the repeats are consecutive marks inside a single capture.",
+      "capture_s": 340,
+      "marks": [
+        {
+          "offset_s": 10,
+          "action": "flame_on",
+          "value": null,
+          "precondition": {
+            "text": null,
+            "flame": "off"
+          },
+          "expected_poll": {
+            "field": "power",
+            "from": 0,
+            "to": 1,
+            "basis": "hypothesised",
+            "note": "ignition"
+          },
+          "observe_s": 20,
+          "note": "pass 0"
+        },
+        {
+          "offset_s": 30,
+          "action": "height",
+          "value": 1,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 1,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 1"
+        },
+        {
+          "offset_s": 50,
+          "action": "height",
+          "value": 2,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 2,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 1"
+        },
+        {
+          "offset_s": 70,
+          "action": "height",
+          "value": 3,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 3,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 1"
+        },
+        {
+          "offset_s": 90,
+          "action": "height",
+          "value": 4,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 4,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 1"
+        },
+        {
+          "offset_s": 110,
+          "action": "height",
+          "value": 5,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 5,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 1"
+        },
+        {
+          "offset_s": 130,
+          "action": "height",
+          "value": 1,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 1,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 2"
+        },
+        {
+          "offset_s": 150,
+          "action": "height",
+          "value": 2,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 2,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 2"
+        },
+        {
+          "offset_s": 170,
+          "action": "height",
+          "value": 3,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 3,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 2"
+        },
+        {
+          "offset_s": 190,
+          "action": "height",
+          "value": 4,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 4,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 2"
+        },
+        {
+          "offset_s": 210,
+          "action": "height",
+          "value": 5,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 5,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 2"
+        },
+        {
+          "offset_s": 230,
+          "action": "height",
+          "value": 1,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 1,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 3"
+        },
+        {
+          "offset_s": 250,
+          "action": "height",
+          "value": 2,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 2,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 3"
+        },
+        {
+          "offset_s": 270,
+          "action": "height",
+          "value": 3,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 3,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 3"
+        },
+        {
+          "offset_s": 290,
+          "action": "height",
+          "value": 4,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 4,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 3"
+        },
+        {
+          "offset_s": 310,
+          "action": "height",
+          "value": 5,
+          "precondition": {
+            "text": null,
+            "flame": "on"
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 5,
+            "basis": "hypothesised",
+            "note": "ladder step"
+          },
+          "observe_s": 20,
+          "note": "pass 3"
+        }
+      ],
+      "repetitions": 1,
+      "ignitions": 1,
+      "between_reps": [],
+      "rationale": "Height is the only multi-valued field (1-5), so a ladder is what turns a mystery byte into a mapping. Three passes over the ladder give three observations per distinct value. All passes live inside a SINGLE capture so the flame is lit once - three separate captures would mean three ignitions and would breach the ignition budget."
+    },
+    {
+      "id": "run-4-height-repeat",
+      "run_index": 4,
+      "name": "height_repeat",
+      "execution_order": 5,
+      "type": "control",
+      "discard": false,
+      "description": "Flame on at +10 s, then height 3 commanded three times at +30, +50 and +70 s. The null case: the value never changes, so the capture should contain NO action-induced change.",
+      "capture_s": 100,
+      "marks": [
+        {
+          "offset_s": 10,
+          "action": "flame_on",
+          "value": null,
+          "precondition": {
+            "text": "flame off, pilot on",
+            "flame": "off",
+            "pilot": "on",
+            "height": null
+          },
+          "expected_poll": {
+            "field": "power",
+            "from": 0,
+            "to": 1,
+            "basis": "hypothesised",
+            "note": "Baseline mark; not the experiment."
+          },
+          "observe_s": 20,
+          "note": "One ignition for the run."
+        },
+        {
+          "offset_s": 30,
+          "action": "height",
+          "value": 3,
+          "precondition": {
+            "text": "flame on since +10 s",
+            "flame": "on",
+            "pilot": "on",
+            "height": null
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": null,
+            "to": 3,
+            "basis": "hypothesised",
+            "note": "Establishes the value being repeated."
+          },
+          "observe_s": 20,
+          "note": "This mark DOES change state and may produce a delta; the run's null claim applies to the two marks after it."
+        },
+        {
+          "offset_s": 50,
+          "action": "height",
+          "value": 3,
+          "precondition": {
+            "text": "flame on, height already 3",
+            "flame": "on",
+            "pilot": "on",
+            "height": 3
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": 3,
+            "to": 3,
+            "basis": "hypothesised",
+            "note": "No transition expected. The command is still sent; /poll should not move."
+          },
+          "observe_s": 20,
+          "note": "NULL CASE. Any frame that differs from the +30 s mark's diff, and is not attributable to the re-send itself, is noise."
+        },
+        {
+          "offset_s": 70,
+          "action": "height",
+          "value": 3,
+          "precondition": {
+            "text": "flame on, height already 3",
+            "flame": "on",
+            "pilot": "on",
+            "height": 3
+          },
+          "expected_poll": {
+            "field": "height",
+            "from": 3,
+            "to": 3,
+            "basis": "hypothesised",
+            "note": "Second null repetition."
+          },
+          "observe_s": 20,
+          "note": "Third send of the same value; the remaining 30 s is post-window."
+        }
+      ],
+      "repetitions": 1,
+      "ignitions": 1,
+      "between_reps": [],
+      "rationale": "A control aimed at a specific failure mode: the orchestrator's differ could be reporting that a frame CHANGED when really it only re-appeared. Sending the identical value three times separates 'the frame is always there' from 'the frame appeared because of the action'. If the +50 and +70 marks show the same delta as the +30 mark, the differ is catching the re-send rather than a state change. One repetition is enough because the point is the within-run comparison; the 10 s pre-window plus 20 s of observation after the last mark needs about 90 s, so the capture is set to 100 s."
+    },
+    {
+      "id": "run-5-pilot",
+      "run_index": 5,
+      "name": "pilot",
+      "execution_order": 7,
+      "type": "stimulus",
+      "discard": false,
+      "description": "Pilot on at +10 s, pilot off at +30 s. Executed LAST of all runs, because a lit pilot is what makes a later ignition reliable.",
+      "capture_s": 60,
+      "marks": [
+        {
+          "offset_s": 10,
+          "action": "pilot_on",
+          "value": null,
+          "precondition": {
+            "text": "flame off",
+            "flame": "off",
+            "pilot": "off",
+            "height": null
+          },
+          "expected_poll": {
+            "field": "pilot",
+            "from": 0,
+            "to": 1,
+            "basis": "observed",
+            "note": "An idle /poll sample reported pilot=1, so 1 is the lit-pilot encoding for this field."
+          },
+          "observe_s": 20,
+          "note": "Standing pilot, not a main-burner ignition; does not count toward max_ignitions. The pilot needs time to establish - watch for a transition later than the fault-free ~2 s a simple switch would give."
+        },
+        {
+          "offset_s": 30,
+          "action": "pilot_off",
+          "value": null,
+          "precondition": {
+            "text": "pilot on since +10 s",
+            "flame": "off",
+            "pilot": "on",
+            "height": null
+          },
+          "expected_poll": {
+            "field": "pilot",
+            "from": 1,
+            "to": 0,
+            "basis": "observed",
+            "note": "The on/off pair across the same field is what pins the pilot command byte."
+          },
+          "observe_s": 20,
+          "note": "The remaining 30 s is post-window."
+        }
+      ],
+      "repetitions": 2,
+      "ignitions": 0,
+      "between_reps": [
+        "restore_pilot"
+      ],
+      "rationale": "Pilot is a separate binary field from the flame and is the one state the /poll answer key already gives an observed value for (pilot=1 when idle), which makes it the cheapest command to pin down. It runs LAST because the pilot must be left lit afterwards for ignition to be reliable - hence between_run_reset is not applied after it. Two repetitions for the on/off pair, and zero ignitions: the standing pilot is not a main-burner light-off and is not charged against max_ignitions. Last mark is at +30 s and the capture is 60 s, giving 30 s of post-window."
+    },
+    {
+      "id": "run-6-reboot-window",
+      "run_index": 6,
+      "name": "reboot_window",
+      "execution_order": 6,
+      "type": "passive",
+      "discard": false,
+      "description": "A long, mark-free 180 s capture intended to span a module reboot and capture the startup handshake. Executed before the pilot run, after the stimulus runs.",
+      "capture_s": 180,
+      "marks": [],
+      "repetitions": 1,
+      "ignitions": 0,
+      "between_reps": [],
+      "rationale": "The module reboots on a roughly 26-minute cycle, which yields about 55 startup handshakes a day for free - but only if a capture happens to be running when one lands. A 180 s window does not guarantee a reboot, so the orchestrator should watch /poll uptime and either extend or accept a null result and rerun later. NO MARK is fired, so every frame in this capture is module-originated: this is the one run that can characterise the handshake without an action confound. Zero ignitions, and it is placed so that it cannot disturb the pilot run that follows it."
+    }
+  ]
+}
