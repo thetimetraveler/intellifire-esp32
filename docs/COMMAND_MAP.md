@@ -44,7 +44,7 @@ detail below.
    **inherited claim** — but its frame format CRC-validates against the reference unit; see
    [FRAME_FORMAT.md](FRAME_FORMAT.md).)
 2. **The `DC` status frame carries ECM-internal sensor knowledge** — pilot, flame height, and especially
-   the `hot` thermal state, which the module has **no channel to learn**. It is on D0, so **D0 is the
+   the byte-9 deadline flag, which the module has **no channel to learn**. It is on D0, so **D0 is the
    ECM**.
 3. **Causality.** The new value appears **first on D1, 0.176 s before** the D0 announcement. The only
    party that *learned* the value is the module.
@@ -54,8 +54,8 @@ detail below.
 ## What is actually established
 
 **Two ECM state announcements (`0xE4`, `0xE1`), the module's write path that precedes them
-(`0x67`/`0x64` in the `BC` reply slot), and four fireplace-state status fields** (pilot, height, hot,
-power), plus one likely length byte. That is the real result so far — **the purpose of the four routine
+(`0x67`/`0x64` in the `BC` reply slot), and four fireplace-state status fields** (pilot, height,
+deadline flag, power), plus one likely length byte. That is the real result so far — **the purpose of the four routine
 command bytes (`BC`, `DC`, `64`, `6E`) is still unknown.**
 
 ⭐ **Plus one more, added 2026-10-16: `0x20`, the ECM's POWER-ON / boot frame.** It is **not** a routine
@@ -68,12 +68,12 @@ command — it fires once per boot and appears nowhere else. See *"`0x20` — th
 | 3 | **Module-side opcode `0x67` = height write** (D1, in the `BC` reply slot) | slot = `67 00 <value> 00` | **confirmed** | **4/4** against the raw frames |
 | 4 | **Module-side opcode `0x64` = flame write** (D1, in the `BC` reply slot) | slot = `64 00 <value> 00` | **strong** | two slot events (on **and** off); raw-frame check **1/1** |
 | 5 | **The write path itself** — the `BC` reply data slot carries every write | slot = `<opcode> 00 <value> 00` | **confirmed** | **6/6 events**, gap 0.175–0.176 s |
-| 6 | Status byte **7** = height | `0x00`–`0x04` | **confirmed** | tracked the commanded height exactly across a 4-step ladder; resets to `0x04` on flame-off |
+| 6 | Status byte **7** = height | `0x00`–`0x04` | **confirmed** | tracked the commanded height exactly across a 4-step ladder; reports `0x04` while off (synthetic); the stored height is restored on flame-on |
 | 7 | Status byte **5** = pilot | `0x01` on / `0x00` off | **confirmed** | 3 runs + idle (was "strong") |
 | 8 | Status byte **10** = power (flame) | `0x01` on / `0x00` off | **confirmed** | 3 runs, both directions (was "strong") |
-| 9 | Status byte **9** = hot | `0x00`/`0x01` | **probable** | 3 runs |
+| 9 | Status byte **9** = 32-bit deadline-armed flag (not "hot") | `0x00`/`0x01` | **strong** | 3 runs; the "hot" label is unsupported |
 | 10 | Status byte **1** = a length/count | `0x17` = 23 = `len(payload) − 2` | **likely** | holds for dev-`0x01` frames, **not** dev-`0x02` |
-| 11 | **`0x20` — POWER-ON / boot frame** (D0, ECM→module) | D0 payload `03 01 01`; D1 reply payload `03 01` (echo) | **confirmed** | **2 observations, byte-identical**, each the **first frame after a boot**, and **absent from every other capture** |
+| 11 | **`0x0320`** (low byte `0x20`) — POWER-ON / boot frame (D0, ECM→module) | D0 payload `03 01 01`; D1 reply payload `03 01` (echo) | **confirmed** | **2 observations, byte-identical**, each the **first frame after a boot**, and **absent from every other capture** |
 
 **Everything else — the *purpose* of the four routine command bytes (`BC`, `DC`, `64`, `6E`) — is
 UNKNOWN.** Those are listed explicitly at the end rather than guessed at. (The **direction** is no
@@ -137,11 +137,13 @@ t=12.598  D1  4B 03 00 20 03 01 8B 5A        seq=0x00
 
 | Field | Value | Confidence |
 |---|---|---|
-| `cmd` | `0x20` = **power-on / boot frame** | **confirmed** |
+| `cmd` | `0x20` = low byte of the **power-on / boot word `0x0320`** | **confirmed** |
 | `dev` | `0x01` on D0, `0x03` on D1 (the usual +2 offset) | confirmed |
 | `seq` | `0x00` — the **first** value after a reset | confirmed |
 | D0 payload | `03 01 01` | observed — **meaning UNKNOWN, do not interpret it** |
 | D1 reply payload | `03 01` | **echo** of the request's first two payload bytes (echo rule, below) |
+
+> **Match the full 16-bit command word.** The boot frame's command word is `0x0320` (high byte `0x03`, low byte `0x20`). The schedule announcement `0x0220` shares the low byte and is **not** a boot frame, so a low-byte-only test is wrong.
 
 **Why this is graded CONFIRMED** (2 observations, but decisive ones):
 
@@ -166,8 +168,8 @@ is **not established by this capture. Do not state which.**
 ⭐ **Both occurrences are boots of the same module inside one capture — and one was spontaneous**
 (t=12.589, no operator action; the other is the operator's power cycle at t=57.070, marked by an
 **11.25 s silence on both lines**). The module's own `/poll` corroborates it: `uptime` stayed `0` with
-`downtime` rising across both events. **This is the project's reboot failure observed in the act** — full
-write-up in [PROTOCOL_DECODED.md](PROTOCOL_DECODED.md), 2026-10-16.
+`downtime` rising across both events. **This is a module reboot observed in the act** — full write-up in
+[PROTOCOL_DECODED.md](PROTOCOL_DECODED.md), 2026-10-16.
 
 ### ⭐ `seq` starts at `0x00` at power-up — more evidence the ECM owns the counter
 
@@ -391,18 +393,19 @@ with a constant; **four values tracking the height exactly proves payload byte 2
 
 **Reply:** shortened, carries no value byte — `D1/0x03/0xE1`, payload `00 01`.
 
-#### ⭐ Flame-off RESETS the height to maximum, with no announcement
+#### ⭐ Flame-off reports the maximum height, with no announcement
 
 In the same capture the flame was turned off at t=72.58 (`D0/0x01/0xE4`, payload `00 01 00`).
 **Status byte 7 jumped `0x00` → `0x04` at t=73.41 with NO `0xE1` frame anywhere near it.** The
-firmware restores the height to maximum when the burner stops. **This explains a previously unexplained
-pattern: every idle capture showed byte 7 = `0x04`** — that is the default, not coincidence.
+status frame reports a **synthetic maximum (4) while the burner is off**; the ECM's stored height is
+restored on flame-on. **This explains a previously unexplained pattern: every idle capture showed byte
+7 = `0x04`** — that is the reported value while off, not the stored height.
 
 > ### ⚠️ Height can only be read or set while the burner is RUNNING
 >
 > A height change commanded with the flame **off** produced **no bus traffic at all** — not an ignored
-> command, but **no frame on the wire**. And the stored value is reset to maximum whenever the burner
-> stops. Height is therefore only meaningful during a burn.
+> command, but **no frame on the wire**. The status value while off is synthetic (maximum); the stored
+> height is restored on flame-on. Height is therefore only meaningful during a burn.
 
 > ### ⚠️ Height is 0-based internally, 1-based in the app
 >
@@ -478,12 +481,14 @@ Payload indices, **0-based**. Idle payload is `00 17 00 00 00 00 00 04` + 17 zer
 |---|---|---|---|---|
 | 1 | `0x17` = 23 = `len(payload) − 2` | length/count | likely | holds for dev-`0x01` frames; **not** dev-`0x02` |
 | 5 | `0x01` / `0x00` | `/poll` `pilot` | **confirmed** | 3 runs + idle |
-| **7** | `0x00`–`0x04` | `/poll` `height` (internal) | **confirmed** | 4-step ladder 3→2→1→0 tracked exactly; resets to `0x04` on flame-off |
-| 9 | `0x00` / `0x01` | `/poll` `hot` | probable | 3 runs |
+| **7** | `0x00`–`0x04` | `/poll` `height` (internal) | **confirmed** | 4-step ladder 3→2→1→0 tracked exactly; reports `0x04` while off (synthetic); stored height restored on flame-on |
+| 9 | `0x00` / `0x01` | 32-bit deadline-armed flag (not `/poll` `hot`) | strong | 3 runs; the "hot" label is unsupported |
 | 10 | `0x00` / `0x01` | `/poll` `power` (flame on/off) | **confirmed** | 3 runs, both directions |
 
-**27 payload bytes total; five fields mapped, the rest unmapped.** Bytes 5 and 10 are genuinely distinct
-fields (pilot stayed `0x01` while power was `0x00`).
+**25 payload bytes total** (the 31-byte frame is 4 header + 25 payload + 2 CRC; the first two payload
+bytes are the command-high byte and the length `0x17`, leaving 23 status data bytes). Five fields are
+mapped, the rest are unmapped. Bytes 5 and 10 are genuinely distinct fields (pilot stayed `0x01` while
+power was `0x00`).
 
 **This frame is on D0**, which is exactly why it is evidence for the direction: it reports
 ECM-internal sensor knowledge the module could not otherwise have (see the correction at the top).

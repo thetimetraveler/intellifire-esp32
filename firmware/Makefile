@@ -13,7 +13,7 @@ BUILD    ?= /tmp/ecm-tests
 TESTS := ecm_host_test ecm_reconciler_test ecm_telemetry_test ecm_inventory_test ecm_framing_test
 BINS  := $(addprefix $(BUILD)/,$(TESTS))
 
-.PHONY: all test test-replay python-test clean
+.PHONY: all test syntax-check test-replay python-test clean
 
 all: $(BINS)
 
@@ -28,6 +28,12 @@ test: all
 		printf '\n== %s ==\n' "$$t"; \
 		$(BUILD)/$$t; \
 	done
+
+# Compile the component against the stub ESPHome/ESP-IDF headers, on both the
+# ESP32 path and the fail-safe (non-ESP32) path. No board or SDK is needed.
+syntax-check:
+	$(CXX) $(CXXFLAGS) -Wpedantic -DUSE_ESP32 -Itest/stubs -Iinclude -fsyntax-only components/fireplace_ecm/fireplace_ecm.cpp
+	$(CXX) $(CXXFLAGS) -Wpedantic -Itest/stubs -Iinclude -fsyntax-only components/fireplace_ecm/fireplace_ecm.cpp
 
 # Full capture replay. Point CAPTURES at the captures directory:
 #   make test-replay CAPTURES=../captures

@@ -30,7 +30,7 @@ failed; the question was still open in July 2026.
 >    come from the ECM.** (post-296 is an **inherited claim**, but its frame format CRC-validates on our
 >    own unit — see `docs/FRAME_FORMAT.md`.)
 > 2. **The `DC` status frame carries ECM-internal sensor knowledge** — pilot, flame height, and
->    especially the `hot` thermal state, which the module has **no channel to learn**. It is on D0, so
+>    especially the byte-9 deadline flag, which the module has **no channel to learn**. It is on D0, so
 >    **D0 is the ECM**.
 > 3. **Causality:** the new value appears **first on D1, 0.176 s before** the D0 announcement. The only
 >    party that *learned* the value is the module.
@@ -114,7 +114,7 @@ read-first block above).
 | Start | **`0x4B`** |
 | **Device** | `0x01`/`0x02` on D0; `0x03`/`0x04` on D1 |
 | **Sequence** | ⭐ **an EXCHANGE counter, +1 per (D0,D1) exchange PAIR — D0 and D1 share the same value, making it the JOIN KEY between the two directions** |
-| Command | `0xBC`, `0xDC`, `0x64`, `0x6E` (routine, purpose unknown); ⭐ **`0xE4` = flame announcement, `0xE1` = flame height announcement** (decoded — see below); ⭐ **`0x20` = the ECM's POWER-ON / boot frame** (decoded — see below). ⚠️ The `0xE4`/`0xE1`/`0x20` frames are **D0/ECM frames**, not commands for an implementer to send |
+| Command | `0xBC`, `0xDC`, `0x64`, `0x6E` (routine, purpose unknown); ⭐ **`0xE4` = flame announcement, `0xE1` = flame height announcement** (decoded — see below); ⭐ **`0x0320` = the ECM's POWER-ON / boot frame** (low byte `0x20`; decoded — see below). ⚠️ The `0xE4`/`0xE1`/`0x0320` frames are **D0/ECM frames**, not commands for an implementer to send |
 | Payload | 2–25 bytes |
 | CRC | **MODBUS CRC-16, little-endian** — poly `0xA001` (reflected), init `0xFFFF`, computed over the frame **from the `0x4B` start byte inclusive** through the last payload byte, stored **little-endian** |
 
@@ -256,11 +256,13 @@ t=12.598  D1  4B 03 00 20 03 01 8B 5A        seq=0x00
 
 | Field | Value | Confidence |
 |---|---|---|
-| `cmd` | `0x20` = **power-on / boot frame** | **confirmed** |
+| `cmd` | `0x20` = low byte of the **power-on / boot word `0x0320`** | **confirmed** |
 | `dev` | `0x01` on D0, `0x03` on D1 (the usual +2 offset) | confirmed |
 | `seq` | `0x00` — the first value after a reset | confirmed |
 | D0 payload | `03 01 01` | observed — **meaning UNKNOWN, do not interpret it** |
 | D1 reply payload | `03 01` | **echo** of the request's first two payload bytes (echo rule, above) |
+
+> **Match the full 16-bit command word.** The boot frame's command word is `0x0320` (high byte `0x03`, low byte `0x20`). The schedule announcement `0x0220` shares the low byte and is **not** a boot frame.
 
 **Why CONFIRMED** (2 observations, but decisive):
 
@@ -536,14 +538,15 @@ Payload indices, 0-based. The idle payload is `00 17 00 00 00 00 00 04` + 17 zer
 | 1 | `0x17` = 23 = `len(payload) − 2` | a length/count field. Holds for the dev-`0x01` frames but **NOT** for dev-`0x02` | likely |
 | 5 | `0x01` pilot on / `0x00` pilot off | `/poll` `pilot` | **confirmed** (3 runs + idle; was "strong") |
 | 7 | `0x00`–`0x04` | `/poll` `height` (internal 0-based) | **confirmed** |
-| 9 | `0x00`/`0x01` | `/poll` `hot` | probable (3 runs) |
+| 9 | `0x00`/`0x01` | 32-bit deadline-armed flag (not `/poll` `hot`) | strong (3 runs; the "hot" label is unsupported) |
 | 10 | `0x00`/`0x01` | `/poll` `power` (flame on/off) | **confirmed** (3 runs, both directions; was "strong") |
 
 **This single frame is the state report.** Four of its fields are pinned to `/poll`; the rest of the
-27-byte payload is unmapped.
+25-byte payload is unmapped. (The 31-byte frame is 4 header + 25 payload + 2 CRC; the first two payload
+bytes are the command-high byte and the length `0x17`, leaving 23 status data bytes.)
 
 ⚠️ **This frame is itself evidence for the direction:** it reports ECM-internal sensor knowledge
-(pilot, height, and the `hot` thermal state) that the module has no channel to learn. It is on D0 — so
+(pilot, height, and the byte-9 deadline flag) that the module has no channel to learn. It is on D0 — so
 D0 is the ECM.
 
 ---
@@ -896,9 +899,9 @@ D1 = module→ECM**); the reply encoding (**the echo rule, 642/642**); the `64 0
 **The framing layer is solved, the direction is resolved, and the module's write path is decoded.** On
 the authority of **dump3 (1 MHz)**, not dump1: start byte, field layout, checksum, the two-line
 request/response structure with a shared wrapping exchange counter, four fireplace-state status fields
-(pilot, height, hot, power), the **`0xE4` flame** and **`0xE1` height** announcements, the **echo rule**,
+(pilot, height, deadline flag, power), the **`0xE4` flame** and **`0xE1` height** announcements, the **echo rule**,
 and — the part that changes the build — **the module's only write channel being the 4-byte slot in its
-reply to `BC`**. **New (2026-10-16):** the ECM's **`0x20` power-on / boot frame** is identified, and a
+reply to `BC`**. **New (2026-10-16):** the ECM's **`0x0320` power-on / boot frame** (low byte `0x20`) is identified, and a
 capture across a manual power cycle **caught the module rebooting twice — once spontaneously**. ⭐ **Also
 corrected 2026-10-16:** the **41–114 µs reply gap is *observed stock behaviour*, not a deadline** — the
 real design budget is **~160 ms**, the ECM tolerates **~5 s** of silence, and **ESPHome is therefore
@@ -910,8 +913,9 @@ which **resets to `0` and parks while replies time out, then resumes from `1`** 
 power-up**; **D0 = ECM→module and D1 = module→ECM**;
 the reply echo rule (642/642); flame and height both settable, with `0xE4`/`0xE1` **announcements**
 carrying the value; the module's write path being the `BC` reply data slot (6/6 events); status byte 7 =
-height (0–4 internal); byte 10 = power; byte 5 = pilot; byte 9 = hot (probable); ⭐ **`0x20` = the ECM's
-power-on / boot frame** (2 observations, byte-identical, absent from every other capture).
+height (0–4 internal); byte 10 = power; byte 5 = pilot; byte 9 = 32-bit deadline-armed flag (strong; the
+"hot" label is unsupported); ⭐ **`0x0320` = the ECM's power-on / boot frame** (2 observations,
+byte-identical, absent from every other capture).
 
 **What is CORRELATED, UNINTERPRETED:** the meaning of the constant `00` between opcode and value in the
 event slot; status byte 1 (length/count); ⭐ **`0x20`'s payload `03 01 01`** (the echo relationship is

@@ -38,8 +38,9 @@
 //     behind it. An outstanding flame request therefore always wins the slot,
 //     exactly as it did before the pilot opcode was known.
 //  3. Height is only written while the flame is BURNING. The ECM ignores it
-//     otherwise, and resets its stored height to maximum on flame-off, so a
-//     height write into a cold appliance is a no-op at best.
+//     otherwise, and reports a synthetic maximum (4) while the flame is off;
+//     its stored height is restored on flame-on, so a height write into a cold
+//     appliance is a no-op at best.
 //  4. Intent that changed while it was in flight is SUPERSEDED: dropped, never
 //     queued, because the protocol has exactly one write slot and a queue would
 //     be a fiction.
@@ -65,9 +66,10 @@
 // refuse, delay or reorder a flame request on the grounds that the ECM reports
 // the pilot off. That is a decision, not an omission:
 //
-//  1. The ECM owns the ignition interlock. The stock module did not enforce
-//     ordering on this link, and a drop-in replacement that did would diverge
-//     from stock — which is the one thing a drop-in replacement must not do.
+//  1. The ECM enforces no pilot-before-flame interlock. The stock module did
+//     not enforce ordering on this link, and a drop-in replacement that added
+//     one would diverge from stock — which is the one thing a drop-in
+//     replacement must not do.
 //  2. The Home Assistant automation layer already owns that policy:
 //     the reference keypad automation refuses to start the flame while the
 //     pilot is off, and speaks a message saying so.
@@ -121,9 +123,9 @@ struct EcmObservation {
 ///
 /// `FlameWithoutPilot` is deliberately its own kind rather than a log line: a
 /// flame-ON commanded while the ECM reports the pilot off still goes out (the
-/// ECM owns the interlock and Home Assistant owns the policy — see the header),
-/// so this is how that condition becomes VISIBLE instead of looking like an
-/// ignition that quietly did not happen.
+/// ECM enforces no interlock and Home Assistant owns the policy — see the
+/// header), so this is how that condition becomes VISIBLE instead of looking
+/// like an ignition that quietly did not happen.
 enum class OutcomeKind : uint8_t {
   None,
   Sent,
@@ -374,7 +376,13 @@ inline void Reconciler::observe(const EcmObservation &o) noexcept {
       this->confirm_inflight_();
     }
   } else if (this->inflight_.cmd == op::HEIGHT) {
-    if (this->last_height_ >= 0 && static_cast<uint8_t>(this->last_height_) == this->inflight_.value) {
+    // Height is only meaningful while the burner is lit. The ECM reports a
+    // synthetic maximum (4) whenever the flame is off, so a height match
+    // against a flame-off frame is NOT evidence that the write landed. Without
+    // this guard, an app-height-5 write (internal 4) would be falsely
+    // confirmed by any flame-off status frame.
+    if (this->last_flame_ == Tri::On && this->last_height_ >= 0 &&
+        static_cast<uint8_t>(this->last_height_) == this->inflight_.value) {
       this->confirm_inflight_();
     }
   }
@@ -436,8 +444,9 @@ inline Slot Reconciler::slot_for_bc_reply(uint32_t now_ms, bool write_enabled) n
 
   if (!have_target && this->desired_height_ >= 0) {
     // Flame GATES height's legality: the ECM ignores a height write while the
-    // flame is off, and resets the stored height to maximum on flame-off.
-    // Writing height into that is a no-op at best — and a height write is never
+    // flame is off, and reports a synthetic maximum (4) while cold. Its stored
+    // height is restored on flame-on. Writing height into that is a no-op at
+    // best — and a height write is never
     // an OFF write, so a latched fault blocks it entirely.
     if (!faulted && this->last_flame_ == Tri::On && this->last_height_ != this->desired_height_) {
       target_op = op::HEIGHT;

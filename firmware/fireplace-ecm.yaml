@@ -302,8 +302,8 @@ switch:
   # pilot-OFF command to the appliance on EVERY boot. A reboot must never
   # re-command the fireplace. Do not "simplify" it away.
   #
-  # This switch does NOT enforce "pilot before flame" — the ECM owns the
-  # ignition interlock and the Home Assistant automation layer owns the policy.
+  # This switch does NOT enforce "pilot before flame" — the ECM enforces no
+  # such interlock and the Home Assistant automation layer owns the policy.
   # A flame-on with the pilot off is still written and reports the distinct
   # outcome "flame requested but pilot reports off" (see README).
   - platform: template
@@ -410,7 +410,7 @@ sensor:
   # The ECM resets its exchange counter to 0 mid-stream after a UART overrun or
   # a desynchronised byte stream. That is a LINK event, not a flame event:
   # nothing in this firmware depends on seq, so an occasional count is expected
-  # and a burst means the link is repeatedly being torn down. The 0x20 boot
+  # and a burst means the link is repeatedly being torn down. The 0x0320 boot
   # frame is excluded, because `Ecm Resets` already counts it.
   - platform: template
     name: "Seq Resets"

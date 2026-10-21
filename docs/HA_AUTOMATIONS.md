@@ -37,7 +37,7 @@ MAC suffix is added). If you change the friendly names in the YAML, adjust these
 | `switch.intellifire_flame` | Flame command (non-optimistic). |
 | `switch.intellifire_pilot_light` | Pilot command (non-optimistic). |
 | `number.intellifire_flame_control` | Flame height, app scale **1–5** (wire/internal is 0–4). |
-| `sensor.intellifire_flame_height` | The height the bridge reports; reads **5** while off because the ECM resets its stored height to maximum. |
+| `sensor.intellifire_flame_height` | The height the bridge reports; reads **5** while off because the ECM reports a synthetic maximum while the burner is off. The stored height is restored on flame-on. |
 | `binary_sensor.intellifire_command_fault` | Latched after 4 failed write attempts; blocks new writes until cleared. |
 | `button.intellifire_clear_command_fault` | Clears the latch. |
 | `binary_sensor.intellifire_ecm_offline_error` | No CRC-valid ECM frame for 5 s. |

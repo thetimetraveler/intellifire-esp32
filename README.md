@@ -19,8 +19,8 @@ telemetry stream over MQTT.
 - **Non-optimistic controls.** Flame, pilot, and height report what the ECM says,
   not what was requested. A refused command snaps back to the truth.
 - **Remembered height.** Setting height while the flame is off is applied at
-  ignition. The ECM itself resets its stored height to maximum when the burner
-  stops.
+  ignition. The ECM reports a synthetic maximum while the burner is off and
+  restores its stored height when the flame relights.
 - **Bounded retries and a latched fault.** A write is retried every 2 s inside an
   8 s window (four attempts); after that a command fault latches and further
   writes stop until a human clears it.
@@ -139,6 +139,7 @@ that document is a design guide.
 
 ```sh
 make -C firmware test                              # five C++20 host suites
+make -C firmware syntax-check                      # component vs. stub headers
 make -C firmware test-replay CAPTURES=../captures   # 6,145-exchange replay
 make -C firmware python-test                       # Python tool suites
 ```

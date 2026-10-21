@@ -22,9 +22,10 @@
 //
 // "Known" here means IMPLEMENTED AND SAFE TO EMIT, not "exists in the ECM".
 // The slot range extends past the three implemented opcodes, but only
-// 0x64/0x65/0x67 are understood well enough to send. 0x66, 0x68, 0x69 and 0x6A
-// stay in the unknown table on purpose: if one is ever sighted, that is a real
-// finding worth recording, not a routine value to be counted and forgotten.
+// 0x64/0x65/0x67 are understood well enough to send. Everything outside those
+// three — 0x66, 0x68–0x6F, and the weekly-schedule ids 0xC8–0xFF — stays in
+// the unknown table on purpose: if one is ever sighted, that is a real finding
+// worth recording, not a routine value to be counted and forgotten.
 //
 // EVERY DIMENSION IS BOUNDED
 // --------------------------
@@ -66,7 +67,7 @@ inline constexpr size_t PAYLOAD_HASH_CAP = 8;
 
 /// Payload indices given a value bitmap. 12 covers every index this project has
 /// mapped or suspects: the 0xBC write slot occupies 0..3, and the status fields
-/// are PILOT=5, HEIGHT=7, FLAG_9=9, FLAME=10.
+/// are PILOT=5, CONFIG=6, HEIGHT=7, HEAT_DEMAND=8, FLAG_9=9, FLAME=10.
 ///
 /// NOTE: the census key is (dir, dev, cmd LOW BYTE), so command words that
 /// share a low byte (0x00F4 vs 0x01F4) are merged in one key. That is a
@@ -118,9 +119,10 @@ inline constexpr uint8_t NEW_SLOT_OP = 1u << 4;
 /// and must never be mistaken for a new opcode.
 ///
 /// This is deliberately narrower than "the ECM has a handler for it". Sending
-/// 0x66, 0x68, 0x69 or 0x6A without understanding it would be a guess; 0x68 in
-/// particular raises internal fault 6 on a nonzero edge. See the namespace
-/// comment in ecm_protocol.h for the documented-but-not-emitted ids.
+/// anything outside 0x64/0x65/0x67 without understanding it would be a guess;
+/// 0x68 in particular raises internal fault 6 on a nonzero change, and
+/// 0xC8–0xFF program the weekly schedule. See the namespace comment in
+/// ecm_protocol.h for the documented-but-not-emitted ids.
 inline bool is_known_slot_op(uint8_t op) noexcept {
   // `op::` is ecm::op from ecm_protocol.h — a DIFFERENT namespace from cmd::,
   // and deliberately not derivable from it. See that file's comment.

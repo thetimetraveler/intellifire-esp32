@@ -187,10 +187,10 @@ void FireplaceECM::handle_frame_(const uint8_t *buf, size_t len) {
   // desynchronised byte stream. Observe that here, and ONLY observe it:
   // nothing below validates or predicts seq.
   // Excluded: the first frame after our own boot (no previous seq to compare)
-  // and the 0x20 boot frame, which `Ecm Resets` already counts. A normal wrap
+  // and the 0x0320 boot frame, which `Ecm Resets` already counts. A normal wrap
   // is 0xFF -> 0x00, so it is excluded too; a reset is any other jump to 0.
   if (this->have_seq_ && frame.seq == 0 && this->last_seq_ != 0xFF &&
-      frame.cmd != ecm::cmd::POWER_ON) {
+      !ecm::is_boot_frame(frame)) {
     this->ecm_seq_resets_++;
   }
   this->last_seq_ = frame.seq;
@@ -214,9 +214,10 @@ void FireplaceECM::handle_frame_(const uint8_t *buf, size_t len) {
     return;  // unknown command — counted and recorded, never guessed at
   }
 
-  if (frame.cmd == ecm::cmd::POWER_ON) {
-    // 0x20 is the ECM's power-on frame (seq=0x00) and appears nowhere else. We
-    // count it and reply to it like any other frame; note that a reboot does
+  if (ecm::is_boot_frame(frame)) {
+    // 0x0320 is the ECM's power-on frame (seq=0x00) and appears nowhere else.
+    // Match the full word: schedule announcement 0x0220 shares the low byte.
+    // We count it and reply to it like any other frame; note that a reboot does
     // NOT reset our intent, so a command a human asked for still lands once the
     // ECM is back — that is the user's intent persisting, not a boot-time write.
     this->ecm_resets_++;

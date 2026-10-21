@@ -452,6 +452,25 @@ static void test_confirmation() {
     check(slot_is(r.poll(), 0x67, 0x00, 0x04, 0x00), "and it is retried at the normal cadence");
   }
 
+  // A flame-off status frame reports the SYNTHETIC height 4, not the stored
+  // height. It must not confirm an in-flight app-height-5 (internal 4)
+  // request: the ECM ignores height writes while the burner is off, so the
+  // match is not evidence that the write landed. The request stays in flight
+  // and confirms only when the burner is actually burning at that height.
+  {
+    Rig r;
+    r.rec.observe(obs(true, 0));
+    r.rec.request_height_app(5);
+    r.poll();
+    check(r.rec.inflight_active(), "height 5 is in flight");
+    r.rec.observe(obs(false, 4));  // flame off -> the status getter's synthetic 4
+    check(r.rec.inflight_active() && r.rec.last_outcome().kind != ecm::OutcomeKind::Confirmed,
+          "a flame-off status reporting the synthetic height 4 does NOT confirm an in-flight height 5");
+    r.rec.observe(obs(true, 4));  // now burning at internal 4 == app 5
+    check(r.rec.last_outcome().kind == ecm::OutcomeKind::Confirmed,
+          "the same height confirms once the flame is ON");
+  }
+
   // One more, deliberately documented rather than assumed: a confirmed request
   // is NOT a one-shot. The intent stands, so if the appliance later reports a
   // state the user did not ask for.

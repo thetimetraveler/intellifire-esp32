@@ -47,7 +47,7 @@ class FrameAssembler {
   static constexpr uint32_t GAP_MS = 8;
 
   /// Longest frame we will accumulate before declaring the stream desynced.
-  /// The longest real frame is 33 bytes (a 31-byte DC plus overhead); 80 leaves
+  /// The longest real frame is 31 bytes (the 0xDC status frame); 80 leaves
   /// generous headroom while still bounding a garbage stream.
   static constexpr size_t MAX_LEN = 80;
 

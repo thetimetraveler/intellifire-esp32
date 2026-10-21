@@ -1,6 +1,6 @@
 // fireplace_ecm.h — ESPHome component: the ECM's polled slave, reimplemented.
 //
-// This is the replacement for the failing Wi-Fi module. It answers the ECM's
+// This is a replacement for the IntelliFire Wi-Fi module. It answers the ECM's
 // polls on the UART and carries commands in the 0xBC reply's 4-byte data slot.
 // The wire format lives in include/ecm_protocol.h and the write-decision policy
 // in include/ecm_reconciler.h — both pure C++20 and host-tested. This file is
@@ -29,9 +29,10 @@
 // ---------------------------------------------------------------------------
 // The ECM owns ignition, flame sensing and the gas valve. This component is a
 // control path, never a safety device. It can command; it can never bypass.
-// There is deliberately no flame-error or pilot-error entity: the ECM's error
-// encoding has never been decoded, and a stub hardwired to `false` would be a
-// silently-never-firing fault alarm — worse than a missing entity.
+// There is deliberately no flame-error or pilot-error entity: the ECM's fault
+// codes are internal and are not transmitted on this link, and a stub
+// hardwired to `false` would be a silently-never-firing fault alarm — worse
+// than a missing entity.
 #pragma once
 
 #include <string>
@@ -130,9 +131,10 @@ class FireplaceECM : public Component, public uart::UARTDevice {
   bool heat_demand_known() const { return this->last_heat_demand_ >= 0; }
 
   /// Height as the APP shows it (1-5) = internal + 1. NAN until a status frame
-  /// has been seen. NOTE: the ECM resets height to maximum whenever the burner
-  /// stops, so this reads 5 while the flame is off. That is faithful to the
-  /// appliance, and it will look like a bug.
+  /// has been seen. NOTE: the ECM reports a synthetic maximum (4) whenever the
+  /// burner is off, so this reads 5 while the flame is off. Its stored height
+  /// is restored on flame-on. That is faithful to the reported state, and it
+  /// will look like a bug.
   float height_app() const;
   bool height_known() const { return this->last_height_ >= 0; }
 

@@ -66,6 +66,8 @@ in [../docs/ECM_PORT_PINOUT.md](../docs/ECM_PORT_PINOUT.md).
 - `seq` is an **exchange counter shared by both directions**. Copy it into the
   reply; never predict or validate it. The ECM can reset it to 0 after a UART
   overrun.
+- The ECM's power-on frame is command word **`0x0320`**. Match the full word:
+  schedule announcement `0x0220` shares the low byte `0x20` and is not a boot.
 
 ### Non-optimistic state
 
@@ -96,13 +98,14 @@ reboot must never re-command the fireplace.
 ### Height scale
 
 Home Assistant and the app use **1–5**. The wire uses **0–4**; the component
-converts. The ECM resets its stored height to maximum when the burner stops, so
+converts. The ECM reports a synthetic maximum (4 on the wire, 5 in the app)
+while the burner is off and restores its stored height on flame-on, so
 `sensor.intellifire_flame_height` reads **5** while the flame is off. That is
-faithful to the appliance, not a bug.
+faithful to the reported state, not a bug.
 
 ### Pilot
 
-The component does **not** enforce pilot-before-flame. The ECM owns the ignition
+The component does **not** enforce pilot-before-flame. The ECM enforces no such
 interlock, and the Home Assistant layer owns the policy. A flame-on while the ECM
 reports the pilot off is still written; the outcome is surfaced as
 `FlameWithoutPilot` in `text_sensor.intellifire_last_command_outcome`.
@@ -155,6 +158,10 @@ IDs are stable:
 Entities that could never fire are deliberately absent. In particular, there is
 no "new opcode" entity: no genuinely new opcode has been observed, so it would
 sit at zero forever. New opcodes are reported over MQTT instead.
+
+There is also no flame-error or pilot-error entity: the ECM's fault codes are
+internal and are not transmitted on this link. A stub hardwired to `false` would
+be a silently-never-firing alarm, which is worse than no entity.
 
 ## Configuration and secrets
 
@@ -230,6 +237,7 @@ laptop:
 
 ```sh
 make test
+make syntax-check
 make test-replay CAPTURES=../captures
 make python-test
 ```
@@ -237,6 +245,9 @@ make python-test
 - `make test` builds and runs five C++20 suites:
   `ecm_host_test`, `ecm_reconciler_test`, `ecm_telemetry_test`,
   `ecm_inventory_test`, `ecm_framing_test`.
+- `make syntax-check` compiles the component against the stub ESPHome/ESP-IDF
+  headers in `test/stubs/`, on both the ESP32 path and the fail-safe
+  (non-ESP32) path. It needs no board or SDK.
 - `make test-replay` replays seven captures. The expected result is
   `compared 6145 exchanges: 6136 byte-identical, 9 module command injections
   (correctly NOT reproduced), 224 unpaired, 0 MISMATCH`.
@@ -277,7 +288,7 @@ Not verified or not implemented:
 | Port is dark (pin 3 at 0 V) | Pin 1 presence gate: 1 kΩ from pin 1 to GND. |
 | Writes never leave | `Write Enable` must be on (GPIO1 low). Check the sense wiring. |
 | `Command Fault` latched | Read `Last Command Outcome`, fix the cause, then press Clear Command Fault. |
-| Height reads 5 while off | Expected: the ECM resets stored height to maximum at flame-off. |
+| Height reads 5 while off | Expected: the ECM reports a synthetic maximum while off and restores the stored height on flame-on. |
 | Repeated reboots | Check the 5 V supply, fuse, bulk capacitance, and that USB is not connected with pin 3. |
 
 ## Safety and license

@@ -119,7 +119,7 @@ inline constexpr uint8_t REPLY = 4;     // module -> ECM, echo + requested bytes
 /// Command bytes (the frame's 4th byte). Prefer the full 16-bit word when
 /// deciding whether a frame is answerable; see `is_announcement_word()` / `is_replyable_request_word()`.
 namespace cmd {
-inline constexpr uint8_t POWER_ON = 0x20;         // ECM boot frame, seq=0x00
+inline constexpr uint8_t POWER_ON = 0x20;         // low byte of boot word 0x0320
 inline constexpr uint8_t FLAME_ANNOUNCE = 0xE4;   // ECM -> module, value 0/1
 inline constexpr uint8_t HEIGHT_ANNOUNCE = 0xE1;  // ECM -> module, value 0-4
 inline constexpr uint8_t PILOT_ANNOUNCE = 0xDF;   // ECM -> module, value 0/1
@@ -202,9 +202,11 @@ inline constexpr uint8_t DIAG = 0x69;          // documented, NOT EMITTED
 inline constexpr uint8_t TEXT_REQUEST = 0x6A;  // documented, NOT EMITTED
 }  // namespace op
 
-/// Payload byte indices of the 0xDC status frame (0-based). The ECM sends this
-/// unprompted; we never ask for it. Everything else in its 27-byte payload is
-/// unmapped and must not be interpreted.
+/// Payload byte indices of the 0xDC status frame (0-based). The parser's
+/// payload is 25 bytes for the 31-byte frame (4 header + 2 CRC); the first two
+/// are the command-high byte and the length 0x17, leaving 23 status data bytes.
+/// The ECM sends this unprompted; we never ask for it. Only the indices below
+/// are interpreted.
 namespace status {
 inline constexpr size_t PILOT = 5;   // 0x01 pilot on / 0x00 off   (confirmed)
 // The data path for both of these is high confidence; the human labels are
@@ -321,6 +323,13 @@ inline bool parse_request(const uint8_t *buf, size_t len, Frame &out) noexcept {
   return true;
 }
 
+/// The ECM's power-on frame is command word 0x0320 (low byte 0x20, high byte
+/// 0x03). Match the FULL word: the schedule announcement 0x0220 shares the low
+/// byte and must not be mistaken for a boot.
+inline bool is_boot_frame(const Frame &f) noexcept {
+  return f.cmd_word() == 0x0320;
+}
+
 // --------------------------------------------------------------------------
 // The 16-bit command word and its documented frame type
 // --------------------------------------------------------------------------
@@ -422,9 +431,9 @@ inline bool is_known_cmd(uint8_t command) noexcept {
 // The 0xBC data slot — the module's only write channel
 // --------------------------------------------------------------------------
 
-/// The 4-byte slot placed in a 0xBC reply. Shape is `<opcode> 00 <value> 00`;
-/// the constant `00` between opcode and value is UNINTERPRETED (correlated,
-/// not explained) — do not read meaning into it, and do not "tidy" it away.
+/// The 4-byte slot placed in a 0xBC reply. Two little-endian uint16 words:
+/// (opcode, value). Idle is `00 00 00 00`; the zero bytes are the high bytes
+/// of those words, not flags or reserved fields. Do not "tidy" them away.
 struct Slot {
   uint8_t b[4];
 };

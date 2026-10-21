@@ -447,7 +447,7 @@ static void test_command_word_and_type() {
        {0x4B, 0x03, 0x00, 0xDE, 0x00, 0x01, 0xEA, 0x5A}},
 
       // The ECM's type-1 echo of a module time sync is answerable...
-      {"0x00C6 type-1 echo is answered echo-only",
+      {"0x02C6 type-1 echo is answered echo-only",
        {0x4B, 0x01, 0x00, 0xC6, 0x02, 0x04, 0x69, 0x55, 0xB9, 0x00, 0x26, 0x94},
        true,
        {0x4B, 0x03, 0x00, 0xC6, 0x02, 0x04, 0xAB, 0x3E}},
@@ -471,6 +471,13 @@ static void test_command_word_and_type() {
        {0x4B, 0x01, 0x00, 0x20, 0x00, 0x01, 0x01, 0x2A, 0x45},
        false,
        {}},
+
+      // 0x0220 is a real schedule announcement (low byte 0x20, high byte 0x02)
+      // and is answered echo-only. It must NOT be mistaken for the boot frame.
+      {"0x0220 schedule announcement is answered echo-only, not boot",
+       {0x4B, 0x01, 0x00, 0x20, 0x02, 0x02, 0x01, 0x00, 0x35, 0x67},
+       true,
+       {0x4B, 0x03, 0x00, 0x20, 0x02, 0x02, 0xCA, 0xCB}},
   };
 
   for (const auto &c : cases) {
@@ -487,6 +494,19 @@ static void test_command_word_and_type() {
             std::string("answered echo-only: ") + c.what, hex(reply, len));
       check(parsed && ecm::is_known_frame(frame), std::string("is_known_frame true: ") + c.what);
     }
+  }
+
+  // The boot frame is identified by the FULL word, not the low byte: 0x0220 is
+  // a schedule announcement that shares 0x20 and must not be counted as a reset.
+  {
+    ecm::Frame boot{};
+    ecm::Frame sched{};
+    const uint8_t boot_req[] = {0x4B, 0x01, 0x00, 0x20, 0x03, 0x01, 0x01, 0xDA, 0x45};
+    const uint8_t sched_req[] = {0x4B, 0x01, 0x00, 0x20, 0x02, 0x02, 0x01, 0x00, 0x35, 0x67};
+    check(ecm::parse_request(boot_req, sizeof(boot_req), boot) && ecm::is_boot_frame(boot),
+          "0x0320 is the boot frame");
+    check(ecm::parse_request(sched_req, sizeof(sched_req), sched) && !ecm::is_boot_frame(sched),
+          "0x0220 shares low byte 0x20 but is NOT the boot frame");
   }
 
   // Announcement words are a property of the WORD; requests are a property of
