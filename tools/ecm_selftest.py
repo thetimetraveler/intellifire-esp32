@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -304,6 +305,14 @@ def main() -> int:
     args = ap.parse_args()
 
     r = Results()
+    if shutil.which("sigrok-cli") is None:
+        r.check(False, "sigrok-cli is installed",
+                "install sigrok-cli to run the VCD and .sr checks")
+        # The sequence-wrap checks use locally constructed frames and do not
+        # need sigrok. Run them anyway so the failure is the only one.
+        v1b_seq_wrap(r)
+        return r.summary()
+
     v1_golden(args.vcd, r)
     v1b_seq_wrap(r)
     if not args.skip_sr:

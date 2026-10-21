@@ -15,6 +15,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install sigrok-cli for the VCD and .sr checks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sigrok-cli
+
       - name: Build and run the host suites
         run: make -C firmware test
 
