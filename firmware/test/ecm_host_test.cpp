@@ -4,7 +4,7 @@
 // the module's own recorded behaviour, because the real module already answered
 // these exact requests — its replies are ground truth.
 //
-//     clang++ -std=c++20 -Wall -Wextra -O1 -o /tmp/ecm_host_test test/ecm_host_test.cpp
+//     c++ -std=c++20 -Wall -Wextra -O1 -o /tmp/ecm_host_test test/ecm_host_test.cpp
 //     /tmp/ecm_host_test                       # built-in vectors
 //     /tmp/ecm_host_test /path/to/captures     # + replay every recorded exchange
 //
@@ -15,6 +15,7 @@
 // This mirrors `tools/ecm_responder.py --selftest`, which is the validated
 // reference. Run both; they must agree.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
