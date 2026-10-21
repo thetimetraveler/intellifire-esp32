@@ -130,10 +130,10 @@ deliberately **off**: the API is the entity path, and enabling discovery as well
 creates a second set of duplicate entities. The MQTT stream is a diagnostic feed
 under `fireplace/ecm/`.
 
-The reference Home Assistant control layer — keypad presses, LED mirroring, a
-safety timer, and the pilot/start/stop policy — is described in
-[docs/HA_AUTOMATIONS.md](docs/HA_AUTOMATIONS.md). No ready-made YAML is shipped;
-that document is a design guide.
+No Home Assistant YAML or automation design is shipped. The ESPHome entities
+are exposed through the native API; build your own start/stop, keypad, and
+safety logic around them. The firmware deliberately leaves pilot-before-flame
+ordering to the home-automation layer.
 
 ## Tests
 
@@ -186,7 +186,6 @@ responder's selftest globs the capture tree.
 - [docs/CHIP_IDENTITY.md](docs/CHIP_IDENTITY.md) — AMW136 identification
 - [docs/APPLIANCE.md](docs/APPLIANCE.md) — PRIMO / IFT 2.0 facts
 - [docs/ANALYZER_SETUP.md](docs/ANALYZER_SETUP.md) — capturing the bus
-- [docs/HA_AUTOMATIONS.md](docs/HA_AUTOMATIONS.md) — Home Assistant design
 
 ## License
 

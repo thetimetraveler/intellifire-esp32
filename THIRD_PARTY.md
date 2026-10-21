@@ -25,8 +25,7 @@ Both are GPLv3. They are external tools, not vendored here.
 
 ## Home Assistant
 
-The design notes in `docs/HA_AUTOMATIONS.md` are original documentation. Home
-Assistant itself is Apache-2.0 and is not vendored.
+Home Assistant itself is Apache-2.0 and is not vendored.
 
 - <https://www.home-assistant.io/>
 

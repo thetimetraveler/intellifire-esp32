@@ -10,7 +10,6 @@
 | [CHIP_IDENTITY.md](CHIP_IDENTITY.md) | Why the radio is an AMW136, not an AMW006, and what changes. |
 | [ANALYZER_SETUP.md](ANALYZER_SETUP.md) | How to capture the bus safely with sigrok/PulseView. |
 | [APPLIANCE.md](APPLIANCE.md) | PRIMO / IFT 2.0 appliance facts, power, and the safety shutoff. |
-| [HA_AUTOMATIONS.md](HA_AUTOMATIONS.md) | The reference Home Assistant control-layer design. |
 | [wiring-diagram.html](wiring-diagram.html) | The earlier ESP32-C6 build's wiring diagram, with the S3 pin map called out. |
 | [esp32-ecm-architecture.html](esp32-ecm-architecture.html) | An illustrated architecture walkthrough of the bridge. |
 

@@ -70,8 +70,8 @@ The reset semantics are the more important question:
   switch, and the Wi-Fi app. The watchdog may count any channel or only the RF
   remote.
 
-Do not rely on the ECM's timer alone. The reference Home Assistant layer runs a
-shorter independent timer (see [HA_AUTOMATIONS.md](HA_AUTOMATIONS.md)).
+Do not rely on the ECM's timer alone. Run a shorter independent timer in your
+home-automation system.
 
 ## Other operational facts
 
