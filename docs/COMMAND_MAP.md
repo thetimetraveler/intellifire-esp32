@@ -427,7 +427,7 @@ t=130.881  D0  4B 01 86 DF 00 01 01 93 8F     payload 00 01 01   pilot ON
 t=130.891  D1  4B 03 86 DF 00 01 92 D2        shortened reply, no value byte
 ```
 
-⭐ **The full causal chain was captured end-to-end for the first time.** The app writes into the module's
+⭐ **The full causal chain was captured end-to-end.** The app writes into the module's
 `0xBC` reply slot; the ECM announces it **one exchange later** — write at `seq N`, announcement at
 `seq N+1`:
 
@@ -543,7 +543,7 @@ At a flame transition, the D1 reply to the *preceding* `BC` frame carries extra 
 | flame **on** | `02 04 64 00 01 00` | echo `02 04` + slot `64 00 01 00` → opcode `0x64`, value `0x01` |
 | flame **off** | `02 04 64 00 00 00` | echo `02 04` + slot `64 00 00 00` → opcode `0x64`, value `0x00` |
 
-**What this used to be recorded as:** a correlation whose meaning nobody knew, "in particular, whether
+**What this used to be recorded as:** a correlation of unknown meaning, "in particular, whether
 `0x64` here is the same thing as the `0x64` *command byte*". **It is the module's write opcode — it is
 not the `0x64` command byte**, which is a separate, still-uninterpreted routine command (see the
 namespace warning above).

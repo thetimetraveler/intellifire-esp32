@@ -1,9 +1,9 @@
-# 🎉 Protocol CRACKED — first capture of the ECM↔WFM link
+# Protocol decoded — ECM ↔ WFM serial link
 
 **Date:** 2026-10-16. **Source:** `logic_analyzer_data/dump1.sr` (the initial capture), superseded by
 `logic_analyzer_data/dump3.vcd` (1 MHz).
 
-**This is the first public decode of this link.** The Home Assistant community thread's two attempts
+**This document records a working decode of this link.** The Home Assistant community thread's two attempts
 (2022–23) both
 failed; the question was still open in July 2026.
 
@@ -86,7 +86,7 @@ The hypothesis was validated three ways:
 1. **CRC-16 MODBUS, little-endian** — both of the community capture's published sample frames validate
    mathematically
    (see `FRAME_FORMAT.md`).
-2. **`0x4B` start byte** — appears 26–47 times in our capture; **zero** under msb-first.
+2. **`0x4B` start byte** — appears 26–47 times in the reference capture; **zero** under msb-first.
 3. **The status payload matches byte-for-byte.** The community capture saw
    `4B 01 9B DC 00 17 00 00 00 00 00 04 …`;
    we captured `4B 01 2A DC 00 17 00 00 00 00 00 04 …`.
